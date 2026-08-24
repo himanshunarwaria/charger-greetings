@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+      RECEIVE_BOOT_COMPLETED re-baselines the charger state after a restart:
+      without it, the first plug or unplug after every reboot would either be
+      missed or greeted incorrectly.
+
+      FOREGROUND_SERVICE + FOREGROUND_SERVICE_SPECIAL_USE run PowerWatcherService,
+      which is what actually catches ACTION_POWER_CONNECTED/_DISCONNECTED
+      reliably. This was NOT the original design; see PowerWatcherService's
+      class comment for why a plain manifest receiver turned out not to be
+      enough. POST_NOTIFICATIONS is required from Android 13 for that service's
+      own status notification to display at all (Android 13+ notifications are
+      opt-in; the app functions with it denied, the notification just won't show).
+
+      Deliberately NOT requested:
+        INTERNET  - the app never makes a network call
+        WAKE_LOCK - not needed: the foreground service state itself already
+                    keeps the process from being suspended
+        REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                  - the battery-optimisation screen is opened via a plain
+                    Settings intent, which needs no permission and avoids the
+                    Play policy attached to that one
+    -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application
+        android:allowBackup="true"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ChargerGreetings"
+        tools:targetApi="31">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:theme="@style/Theme.ChargerGreetings">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Best-effort second path only, NOT the reliable mechanism. These two
+          actions are not on Android's implicit-broadcast exemption list (see
+          PowerEventReceiver.kt for the verification). PowerWatcherService is
+          what actually works; this stays registered because it costs nothing
+          and is a free bonus on whatever device/OS combination still lets it
+          through.
+
+          android:exported="false" - these are system broadcasts delivered to us
+          directly; no other app has any reason to trigger this receiver.
+        -->
+        <receiver
+            android:name=".power.PowerEventReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter android:priority="100">
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
+          The reliable mechanism. See PowerWatcherService.kt for the full
+          rationale. specialUse is the correct Android 14+ foreground-service
+          type for "watch for a hardware state change and react"; there is no
+          better-fitting predefined category.
+        -->
+        <service
+            android:name=".power.PowerWatcherService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Watches for the charger being connected or disconnected so it can play a spoken greeting" />
+        </service>
+
+        <receiver
+            android:name=".power.BootReceiver"
+            android:enabled="true"
+            android:exported="false"
+            android:directBootAware="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <!-- Some OEM ROMs send only one of these; accepting all three
+                     is the difference between working and not on those devices. -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+
+    </application>
+</manifest>

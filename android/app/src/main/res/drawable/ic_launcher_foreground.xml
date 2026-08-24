@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Adaptive-icon foreground: the plug mark.
+
+    Drawn in the 108x108 adaptive viewport with the whole glyph inside the
+    central 72x72 safe zone (18..90 on both axes), so no launcher mask - circle,
+    squircle, teardrop - can clip a prong or the cable.
+
+    Same proportions as the Windows tray icon (tools/IconGen), so the two apps
+    share one mark.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- left prong -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M45.9,28.08 H45.9 A3.78,3.78 0 0 1 49.68,31.86 V41.22 A3.78,3.78 0 0 1 45.9,45 H45.9 A3.78,3.78 0 0 1 42.12,41.22 V31.86 A3.78,3.78 0 0 1 45.9,28.08 Z" />
+
+    <!-- right prong -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M62.1,28.08 H62.1 A3.78,3.78 0 0 1 65.88,31.86 V41.22 A3.78,3.78 0 0 1 62.1,45 H62.1 A3.78,3.78 0 0 1 58.32,41.22 V31.86 A3.78,3.78 0 0 1 62.1,28.08 Z" />
+
+    <!-- body -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M42.12,42.84 H65.88 A6.12,6.12 0 0 1 72,48.96 V56.52 A6.12,6.12 0 0 1 65.88,62.64 H42.12 A6.12,6.12 0 0 1 36,56.52 V48.96 A6.12,6.12 0 0 1 42.12,42.84 Z" />
+
+    <!-- cable -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,61.2 H54 A4.1,4.1 0 0 1 58.1,65.3 V72.58 A4.1,4.1 0 0 1 54,76.68 H54 A4.1,4.1 0 0 1 49.9,72.58 V65.3 A4.1,4.1 0 0 1 54,61.2 Z" />
+</vector>

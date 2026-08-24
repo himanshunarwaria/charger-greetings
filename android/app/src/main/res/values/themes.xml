@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      A bare splash-free theme. Compose draws everything; this exists only so
+      the window has sensible colours during the moment before the first frame,
+      in both light and dark (see values-night/themes.xml).
+    -->
+    <style name="Theme.ChargerGreetings" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Matches the Compose light background so there is no flash on launch. -->
+    <color name="window_background">#FFFBFBFE</color>
+
+    <!-- Adaptive launcher icon background: the brand indigo. -->
+    <color name="ic_launcher_background">#FF6366F1</color>
+</resources>

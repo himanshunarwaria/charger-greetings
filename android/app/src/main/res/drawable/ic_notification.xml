@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Status-bar icon for the "watching for power changes" notification.
+
+    Android requires status-bar icons to be a flat white silhouette on a
+    transparent background (the system tints them itself); a full-colour
+    launcher icon is rejected and rendered as a grey blob. Same plug silhouette
+    as the launcher, traced at the 24dp status-bar viewport.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M9.3,5.5 H9.3 A0.9,0.9 0 0 1 10.2,6.4 V8.6 A0.9,0.9 0 0 1 9.3,9.5 H9.3 A0.9,0.9 0 0 1 8.4,8.6 V6.4 A0.9,0.9 0 0 1 9.3,5.5 Z" />
+
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M14.7,5.5 H14.7 A0.9,0.9 0 0 1 15.6,6.4 V8.6 A0.9,0.9 0 0 1 14.7,9.5 H14.7 A0.9,0.9 0 0 1 13.8,8.6 V6.4 A0.9,0.9 0 0 1 14.7,5.5 Z" />
+
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M8.4,9.2 H15.6 A1.4,1.4 0 0 1 17,10.6 V12.4 A1.4,1.4 0 0 1 15.6,13.8 H8.4 A1.4,1.4 0 0 1 7,12.4 V10.6 A1.4,1.4 0 0 1 8.4,9.2 Z" />
+
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M12,13.6 H12 A0.95,0.95 0 0 1 12.95,14.55 V17.1 A0.95,0.95 0 0 1 12,18.05 H12 A0.95,0.95 0 0 1 11.05,17.1 V14.55 A0.95,0.95 0 0 1 12,13.6 Z" />
+</vector>

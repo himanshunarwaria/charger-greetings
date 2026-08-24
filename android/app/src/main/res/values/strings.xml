@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Charger Greetings</string>
+
+    <!-- The two spoken phrases, shown next to their switches. -->
+    <string name="phrase_connected" translatable="false">मालिक, प्रणाम</string>
+    <string name="phrase_disconnected" translatable="false">फिर मिलते हैं, मालिक</string>
+
+    <!-- Foreground-service notification, see PowerWatcherService for why
+         this exists. Kept as flat and unalarming as the wording allows. -->
+    <string name="watcher_notification_title">Charger Greetings</string>
+    <string name="watcher_notification_text">Watching for power changes</string>
+    <string name="watcher_channel_name">Power watcher</string>
+    <string name="watcher_channel_description">Keeps the app ready to greet you when the charger is connected or removed</string>
+</resources>

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 and below (fullBackupContent).
+
+    Only the preferences file is backed up, so a user restoring to a new phone
+    keeps their volume and switches. Everything else - including the diagnostics
+    log - is excluded by omission: once any <include> is present, anything not
+    named is already excluded, and adding a redundant <exclude> for it is a lint
+    error (FullBackupContent), not just noise.
+
+    Note that backup granularity is per *file*, not per key, so the engine's
+    power-state bookkeeping travels with the preferences. That is harmless: the
+    app must be opened once on the new device before Android will deliver it any
+    broadcasts, and opening it re-baselines the power state against reality.
+-->
+<full-backup-content>
+    <include domain="sharedpref" path="charger_greetings.xml" />
+</full-backup-content>
