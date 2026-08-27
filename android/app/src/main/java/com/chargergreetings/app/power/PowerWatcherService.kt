@@ -1,5 +1,6 @@
 package com.chargergreetings.app.power
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,53 +10,47 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import com.chargergreetings.app.MainActivity
 import com.chargergreetings.app.R
+import com.chargergreetings.app.core.SettingsRepository
 import com.chargergreetings.app.util.Diagnostics
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 
 /**
- * The reliable path for catching charger connect/disconnect while the app is
- * closed.
+ * Holds a dynamically-registered receiver for the power broadcasts, for as long
+ * as monitoring is enabled.
  *
- * ### Why this exists
- * `ACTION_POWER_CONNECTED` / `ACTION_POWER_DISCONNECTED` are **not** on
- * Android's implicit-broadcast exemption list -- confirmed both against the
- * official docs and live, on real Android 16 hardware, where the system
- * explicitly logged refusing delivery to a manifest-registered receiver in a
- * background app ("Background execution not allowed"). No battery-
- * optimisation exemption fixes that; it is a different, non-overridable
- * restriction. See [PowerEventReceiver] for the full account.
+ * ### Why a foreground service at all
+ * ACTION_POWER_CONNECTED / ACTION_POWER_DISCONNECTED are **not** on Android's
+ * implicit-broadcast exemption list. Verified twice: against the official docs,
+ * and live on an Android 16 device where the system logged
+ * "skipped by policy at enqueue: Background execution not allowed" while
+ * refusing to deliver to our manifest receiver. Android's own documented
+ * alternative is to register the receiver dynamically from a component that is
+ * actually alive, which is what this service is for.
  *
- * Android's own documented alternative for exactly this situation is to
- * register the receiver **dynamically**, via `Context.registerReceiver()`,
- * from a component that is actually alive. A foreground service is the
- * standard, Play-policy-compliant way to keep one alive continuously enough
- * to guarantee that.
+ * ### What it costs the user
+ * One silent, minimum-importance, ongoing notification while monitoring is on.
+ * Android requires this for any foreground service; there is no way around it.
+ * It disappears the moment the master switch goes off.
  *
- * ### What this costs the user
- * A quiet, minimum-importance, permanent notification while the feature is
- * on -- Android requires a foreground service to show one, there is no way
- * around that. It is silent, has no sound or vibration, and disappears the
- * instant the feature is switched off. This is a real, honest trade-off
- * against the "no unnecessary background services" ambition the app started
- * with: given the platform's actual behaviour, *some* long-lived component is
- * required for the app to work as advertised at all.
- *
- * ### Lifecycle
- * Started from [BootReceiver] on boot and from [MainActivity] on open, and
- * stopped the moment the user turns the master switch off. `START_STICKY` so
- * the system tries to bring it back if it is killed under memory pressure,
- * though Android 12+ imposes further limits on that too -- this is best
- * effort, not a guarantee, and is stated as such in the settings screen.
+ * ### Reliability notes
+ * - startForeground is wrapped: on Android 12+ it throws when started from the
+ *   background without an exemption, and an unhandled throw in onCreate would
+ *   crash the app and leave monitoring dead with no diagnosis.
+ * - The receiver is registered *before* the notification, so a notification
+ *   failure can never cost us the actual monitoring.
+ * - [WatchdogWorker] repairs this service if the system or an OEM kills it.
  */
 class PowerWatcherService : Service() {
 
@@ -66,24 +61,89 @@ class PowerWatcherService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(NOTIFICATION_ID, buildNotification())
+        val settings = SettingsRepository(this)
+
+        // Register first. Monitoring is the point of this service; the
+        // notification is only the price Android charges for staying alive.
         registerDynamicReceiver()
-        Diagnostics.log(this, "PowerWatcherService started (dynamic receiver active)")
+
+        val notificationProblem = enterForeground()
+        if (notificationProblem != null) {
+            settings.lastError = notificationProblem
+            Diagnostics.log(this, "Service foreground failed: " + notificationProblem)
+            // Without foreground status Android kills this process shortly.
+            // Stop cleanly so the watchdog can retry later under better
+            // conditions, rather than lingering half-dead.
+            stopSelf()
+            return
+        }
+
+        settings.serviceRunning = true
+        settings.lastServiceStartAt = System.currentTimeMillis()
+        Diagnostics.log(this, "Service started (receiver active)")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // onCreate() already did the work; nothing extra to do per start,
-        // but returning START_STICKY here is what actually takes effect.
+        // START_STICKY asks Android to recreate this service if the process is
+        // killed. It is a request, not a contract: OEM battery managers
+        // routinely ignore it, which is exactly why WatchdogWorker exists.
+        // A null intent means precisely that -- we were restarted after a kill.
+        if (intent == null) {
+            Diagnostics.log(this, "Service recreated by system after process death")
+        }
         return START_STICKY
+    }
+
+    /**
+     * Swiping the app out of Recents must not stop monitoring: that is the most
+     * common way users "lose" this kind of app. The service keeps running; we
+     * only make sure the watchdog is scheduled in case an OEM kills us anyway.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Diagnostics.log(this, "App removed from Recents; monitoring continues")
+        WatchdogWorker.enqueue(applicationContext)
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
         receiver?.let {
-            try { unregisterReceiver(it) } catch (_: Exception) { }
+            try {
+                unregisterReceiver(it)
+            } catch (e: IllegalArgumentException) {
+                Diagnostics.log(this, "Receiver already unregistered: " + e.message)
+            }
         }
         receiver = null
-        Diagnostics.log(this, "PowerWatcherService stopped")
+        scope.cancel()
+
+        val settings = SettingsRepository(this)
+        settings.serviceRunning = false
+        settings.lastServiceStopAt = System.currentTimeMillis()
+
+        Diagnostics.log(this, "Service stopped")
         super.onDestroy()
+    }
+
+    /**
+     * Calls startForeground with the correct type for the platform.
+     * @return null on success, or a user-presentable failure reason.
+     */
+    private fun enterForeground(): String? = try {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10+ accepts an explicit type; 14+ requires one.
+            ServiceCompat.startForeground(
+                this,
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        null
+    } catch (e: Exception) {
+        describeStartFailure(e)
     }
 
     private fun registerDynamicReceiver() {
@@ -95,21 +155,18 @@ class PowerWatcherService : Service() {
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 val greeting = PowerEventHandler.actionToGreeting(intent.action) ?: return
-                // A dynamically-registered receiver's onReceive still has a
-                // short execution budget; hop to the service's own scope so
-                // playback (which may include a configured delay) is not cut
-                // short the way it would be here.
+                // onReceive has a short budget of its own; hand off to the
+                // service scope so a configured delay cannot be cut short.
                 scope.launch { PowerEventHandler.handle(applicationContext, greeting) }
             }
         }
         receiver = r
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            registerReceiver(r, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(r, filter)
-        }
+        // RECEIVER_NOT_EXPORTED is correct: these are protected system
+        // broadcasts, and no other app has any business triggering us.
+        ContextCompat.registerReceiver(
+            this, r, filter, ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 
     private fun buildNotification(): Notification {
@@ -156,13 +213,47 @@ class PowerWatcherService : Service() {
         private const val CHANNEL_ID = "power_watcher"
         private const val NOTIFICATION_ID = 1
 
-        /** Starts the service if it is not already running. Safe to call repeatedly. */
-        fun start(context: Context) {
-            val intent = Intent(context, PowerWatcherService::class.java)
-            ContextCompat.startForegroundService(context, intent)
+        /**
+         * Turns a foreground-service start failure into something a user can
+         * act on. Matched by class name so this still compiles against SDKs
+         * older than the one that introduced the exception.
+         */
+        private fun describeStartFailure(e: Exception): String =
+            if (e::class.java.simpleName == "ForegroundServiceStartNotAllowedException") {
+                "Android blocked starting the background monitor. " +
+                    "Turn off battery optimisation for this app to allow it."
+            } else {
+                "Could not start the monitor: " + (e.message ?: e::class.java.simpleName)
+            }
+
+        /**
+         * True if our service is actually alive right now.
+         *
+         * getRunningServices is deprecated for inspecting *other* apps but still
+         * reliably reports your own, which is all we ask. Checked instead of the
+         * stored flag because a process killed outright never runs onDestroy,
+         * leaving that flag stale and the watchdog blind.
+         */
+        fun isRunning(context: Context): Boolean = try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            @Suppress("DEPRECATION")
+            am.getRunningServices(Int.MAX_VALUE)
+                .any { it.service.className == PowerWatcherService::class.java.name }
+        } catch (e: Exception) {
+            Diagnostics.log(context, "isRunning query failed, using stored flag: " + e.message)
+            SettingsRepository(context).serviceRunning
         }
 
-        /** Stops the service. Safe to call even if it is not running. */
+        /** @return null on success, or a user-presentable failure reason. */
+        fun start(context: Context): String? = try {
+            ContextCompat.startForegroundService(
+                context, Intent(context, PowerWatcherService::class.java)
+            )
+            null
+        } catch (e: Exception) {
+            describeStartFailure(e)
+        }
+
         fun stop(context: Context) {
             context.stopService(Intent(context, PowerWatcherService::class.java))
         }

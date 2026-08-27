@@ -72,39 +72,66 @@ Installs per-user into `%LOCALAPPDATA%\Programs`, registers under
 
 ## Android
 
-**Stack:** Kotlin (via AGP 9), Jetpack Compose + Material 3, minSdk 24, targetSdk 36, compileSdk 37.
+**Stack:** Kotlin (via AGP 9), Jetpack Compose + Material 3, minSdk 24,
+targetSdk 36, compileSdk 37.
 
 ```
 MainActivity            one screen, Compose
  └── SettingsViewModel  UI state; baselines silently on open
-      └── SettingsScreen
 
-PowerEventReceiver ◀── ACTION_POWER_CONNECTED / _DISCONNECTED  (manifest)
-BootReceiver       ◀── BOOT_COMPLETED / MY_PACKAGE_REPLACED
- └── GreetingEngine ★ the rules — pure Kotlin, zero Android types
-      ├── GreetingStore  ← SettingsRepository (SharedPreferences)
-      ├── PowerStatus    reads the sticky battery intent
-      └── GreetingPlayer MediaPlayer + transient ducking audio focus
+MonitoringController ★  the ONE place that starts or stops monitoring
+ ├── master toggle          (user action)
+ ├── BootReceiver           BOOT_COMPLETED / LOCKED_BOOT_COMPLETED
+ └── WatchdogWorker         WorkManager, every 15 min
+
+PowerWatcherService     foreground, START_STICKY
+ └── dynamically-registered receiver
+      └── PowerEventHandler
+           ├── GreetingEngine ★ the rules -- pure Kotlin, zero Android types
+           ├── PowerStatus      reads the sticky battery intent
+           └── GreetingPlayer   MediaPlayer + transient ducking audio focus
 ```
+
+### Why a foreground service, not a manifest receiver
+
+The obvious design -- a manifest receiver for `ACTION_POWER_CONNECTED` -- does
+not work, and this was learned the hard way. Those two actions are **not** on
+Android's implicit-broadcast exemption list. On a real Android 16 device the
+system logs `skipped by policy at enqueue: Background execution not allowed`
+and refuses delivery. Android's documented alternative is to register the
+receiver dynamically from a component that is alive, which is what the service
+is for. The manifest receiver is retained only as a free best-effort bonus on
+whatever device/OS combination still lets it through.
+
+### Why a watchdog
+
+Starting the service from app-launch and boot alone left no recovery path: when
+an OEM battery manager killed it at 3am, monitoring stayed dead until the user
+reopened the app. `START_STICKY` is a request, not a contract. `WatchdogWorker`
+is the repair mechanism; WorkManager is used because it is the one scheduler
+that survives process death, standby buckets and reboots.
+
+Full analysis, permission justifications and the test matrix:
+[android/RELIABILITY.md](android/RELIABILITY.md).
 
 ### The central constraint
 
-**A `BroadcastReceiver` may run in a brand-new process every time.** No in-memory
-state survives between events. So `GreetingEngine` holds nothing itself — it
-reads and writes every piece of state through `GreetingStore`, and the
-SharedPreferences implementation uses `commit()` (not `apply()`) for the two
+**A `BroadcastReceiver` may run in a brand-new process every time.** No
+in-memory state survives between events. So `GreetingEngine` holds nothing
+itself -- it reads and writes every piece of state through `GreetingStore`, and
+the SharedPreferences implementation uses `commit()` (not `apply()`) for the
 values that must not be lost if the process dies the instant the receiver
 returns.
 
-This constraint is also what makes the design testable: an engine with no
+That constraint is also what makes the design testable: an engine with no
 in-memory state and no Android types is just a function of (event, stored state,
-config), which is exactly what the 19 JVM unit tests exercise.
+config), which is what the 29 JVM unit tests exercise.
 
 ### The rules, in order
 
 1. **Contradiction check.** Broadcast says "connected" but the battery service
    says unplugged? The cable bounced. Record the truth, say nothing.
-2. **Duplicate check.** Already in the claimed state → repeat delivery.
+2. **Duplicate check.** Already in the claimed state -> repeat delivery.
 3. **Preferences.** Master switch, then the per-direction switch.
 4. **Cooldown.** A hard floor between greetings.
 5. **Silent mode**, if the user asked for it.
@@ -116,13 +143,15 @@ judged against the truth rather than a stale value.
 
 | Decision | Why |
 |---|---|
-| **Manifest receiver, no Service** | `ACTION_POWER_CONNECTED`/`_DISCONNECTED` are exempt from the Android 8 implicit-broadcast restrictions, so a manifest receiver is still launched with the app closed. A foreground service would be heavier, need more permissions, and on Android 12+ is blocked from starting in the background for a trigger like this. |
-| **`goAsync()`** | A receiver gets ~10 s of grace; the clip is ~1.6 s. Playback is wrapped in a 7 s timeout with `finish()` in a `finally`, so a wedged audio stack cannot leak the `PendingResult`. |
+| **Foreground service** | The only supported way to receive the power broadcasts with the app closed. Costs one silent, minimum-importance notification. |
+| **WorkManager watchdog, 15 min** | Repairs the service after an OEM kill. Not the detection path, so the 15-minute floor costs at most 15 minutes of downtime after a kill instead of "dead until reopened". |
+| **Battery-optimisation exemption treated as required** | On Android 12+ a non-exempt app cannot start a foreground service from the background, so without it the watchdog is blocked by policy and cannot repair anything. |
+| **`goAsync()` in receivers** | A receiver gets ~10 s of grace; the clip is ~1.6 s. Playback is wrapped in a 7 s timeout with `finish()` in a `finally`, so a wedged audio stack cannot leak the `PendingResult`. |
 | **SharedPreferences, not DataStore** | A receiver's decision window is short and synchronous. DataStore's Flow API would mean blocking on a coroutine or racing the receiver's lifetime. |
-| **Bundled WAV in `res/raw`** | Works offline with no permission and no file picker. `noCompress += "wav"` keeps it uncompressed so playback starts immediately. |
+| **SAF `OpenDocument`, not `GetContent`** | Only `OpenDocument` returns a URI that `takePersistableUriPermission` accepts. `GetContent` gives a one-shot grant that silently stops working after a reboot. |
+| **Bundled WAV in `res/raw` as the default** | Works offline with no permission and no file picker, and is the fallback whenever a custom sound goes missing. |
 | **`USAGE_ASSISTANCE_SONIFICATION`** | It is a UI sound: should not show as "now playing", should not route to a call. Silent-mode behaviour is then an explicit user setting rather than an accident of stream routing. |
 | **Transient ducking audio focus** | Music dips for 1.6 s instead of stopping; podcast apps keep their position. |
-| **One permission** | `RECEIVE_BOOT_COMPLETED` only. Battery-optimisation settings are opened with a plain `Settings` intent, which needs no permission and avoids the Play policy attached to `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`. |
 | **Compose + Material 3** | Dynamic colour on Android 12+, dark mode for free, and semantics for accessibility that would have been hand-rolled with Views. |
 
 ---

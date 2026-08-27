@@ -17,7 +17,7 @@ analytics, ads or network access of any kind.
 | | Built | Tests | Verified on real hardware |
 |---|---|---|---|
 | **Windows** | ✅ 214 KB exe + installer | ✅ 36/36 | ✅ real charger events, sign-in startup |
-| **Android** | ✅ 1.3 MB release APK | ✅ 19/19 | ⬜ needs your phone |
+| **Android** | ✅ 1.3 MB release APK | ✅ 29/29 | ⬜ needs your phone |
 
 ---
 
@@ -144,7 +144,7 @@ The project **builds and its tests pass**. Android Studio 2026.1, the SDK
 verify:
 
 ```
-:app:testDebugUnitTest   19/19 pass
+:app:testDebugUnitTest   29/29 pass
 :app:assembleDebug       app-debug.apk             18.4 MB
 :app:assembleRelease     app-release-unsigned.apk   1.3 MB   (R8 shrinks it 14x)
 :app:lintDebug           0 errors, 20 warnings
@@ -172,7 +172,7 @@ quirks, are in [android/README.md](android/README.md). The short version:
 
 ```bash
 cd android
-./gradlew :app:testDebugUnitTest     # 19 unit tests for the decision rules
+./gradlew :app:testDebugUnitTest     # 29 unit tests for the decision rules
 ./gradlew :app:assembleDebug         # debug APK
 ./gradlew :app:bundleRelease         # release AAB (needs signing, below)
 ```

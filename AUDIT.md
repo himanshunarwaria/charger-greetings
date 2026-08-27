@@ -88,7 +88,7 @@ of bug a test suite that only runs on a pumped thread will never see.
 | A-2 | No bundled audio — the user must pick a file with the storage picker. | High | Core feature depends on an external file and a persistable URI grant that can be revoked. Not offline-safe. | Both clips bundled in `res/raw`. Zero external dependencies. | ✅ |
 | A-3 | One sound for both directions; disconnect defaults **off**. | High | The brief requires two distinct greetings. | Two clips, two independent switches, both on by default. | ✅ |
 | A-4 | No `BOOT_COMPLETED` receiver. | High | After a reboot the app has no baseline; the next event is judged against stale state. | `BootReceiver` re-baselines silently on boot and after app update. | ✅ |
-| A-5 | No debounce, dedup or cooldown. | High | Repeated broadcasts each start a new `MediaPlayer`. | `GreetingEngine` with persisted state, contradiction check, dedup and cooldown. 19 unit tests, all passing. | ✅ |
+| A-5 | No debounce, dedup or cooldown. | High | Repeated broadcasts each start a new `MediaPlayer`. | `GreetingEngine` with persisted state, contradiction check, dedup and cooldown. 29 unit tests, all passing. | ✅ |
 | A-6 | `android:exported="true"` on the power receiver. | Medium | Any app on the device could spoof a power event. No reason to be exported. | `android:exported="false"`. | ✅ |
 | A-7 | `goAsync()` `PendingResult` can leak if `prepareAsync` never calls back. | Medium | Holds the process alive until the system kills it; logs an ANR-style warning. | Playback wrapped in `withTimeoutOrNull(7 s)`; `finish()` in a `finally`. | ✅ |
 | A-8 | No audio focus request. | Medium | Rudely talks over music; podcast apps lose position. | Transient ducking focus, always abandoned. | ✅ |

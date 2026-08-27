@@ -80,6 +80,78 @@ class SettingsRepository(context: Context) : GreetingStore {
         get() = prefs.getBoolean(KEY_FIRST_RUN_DONE, false)
         set(value) = prefs.edit { putBoolean(KEY_FIRST_RUN_DONE, value) }
 
+
+    // --- custom sounds (Storage Access Framework) --------------------------
+    //
+    // Stored as the string form of a content:// URI the user picked. Null or
+    // blank means "use the bundled clip". Durable access across reboots comes
+    // from takePersistableUriPermission at pick time; SoundLibrary handles the
+    // read-back and the case where the file is later moved or deleted.
+
+    var connectedSoundUri: String?
+        get() = prefs.getString(KEY_URI_CONNECTED, null)?.ifBlank { null }
+        set(value) = prefs.edit { putString(KEY_URI_CONNECTED, value ?: "") }
+
+    var disconnectedSoundUri: String?
+        get() = prefs.getString(KEY_URI_DISCONNECTED, null)?.ifBlank { null }
+        set(value) = prefs.edit { putString(KEY_URI_DISCONNECTED, value ?: "") }
+
+    fun soundUriFor(greeting: Greeting): String? = when (greeting) {
+        Greeting.CONNECTED -> connectedSoundUri
+        Greeting.DISCONNECTED -> disconnectedSoundUri
+    }
+
+    fun setSoundUriFor(greeting: Greeting, uri: String?) {
+        when (greeting) {
+            Greeting.CONNECTED -> connectedSoundUri = uri
+            Greeting.DISCONNECTED -> disconnectedSoundUri = uri
+        }
+    }
+
+    // --- service state and diagnostics -------------------------------------
+    //
+    // These let the watchdog and the diagnostics panel answer "is it actually
+    // running?" instead of guessing. serviceRunning uses commit(), not apply():
+    // the watchdog may read it from a different process moments after the
+    // service process died, and an unflushed apply() would read as stale.
+
+    @Suppress("ApplySharedPref")
+    var serviceRunning: Boolean
+        get() = prefs.getBoolean(KEY_SERVICE_RUNNING, false)
+        set(value) { prefs.edit().putBoolean(KEY_SERVICE_RUNNING, value).commit() }
+
+    var lastServiceStartAt: Long
+        get() = prefs.getLong(KEY_LAST_SERVICE_START, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_SERVICE_START, value) }
+
+    var lastServiceStopAt: Long
+        get() = prefs.getLong(KEY_LAST_SERVICE_STOP, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_SERVICE_STOP, value) }
+
+    var lastBootRestoreAt: Long
+        get() = prefs.getLong(KEY_LAST_BOOT_RESTORE, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_BOOT_RESTORE, value) }
+
+    var lastEventDescription: String?
+        get() = prefs.getString(KEY_LAST_EVENT, null)?.ifBlank { null }
+        set(value) = prefs.edit { putString(KEY_LAST_EVENT, value ?: "") }
+
+    var lastEventAt: Long
+        get() = prefs.getLong(KEY_LAST_EVENT_AT, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_EVENT_AT, value) }
+
+    var lastPlaybackAt: Long
+        get() = prefs.getLong(KEY_LAST_PLAYBACK, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_PLAYBACK, value) }
+
+    var lastError: String?
+        get() = prefs.getString(KEY_LAST_ERROR, null)?.ifBlank { null }
+        set(value) = prefs.edit { putString(KEY_LAST_ERROR, value ?: "") }
+
+    var lastRecoveryAt: Long
+        get() = prefs.getLong(KEY_LAST_RECOVERY, 0L)
+        set(value) = prefs.edit { putLong(KEY_LAST_RECOVERY, value) }
+
     // --- helpers ------------------------------------------------------------
 
     fun config(): GreetingConfig = GreetingConfig(
@@ -117,5 +189,16 @@ class SettingsRepository(context: Context) : GreetingStore {
         private const val KEY_LAST_STATE = "last_state"
         private const val KEY_LAST_GREETING_AT = "last_greeting_at"
         private const val KEY_FIRST_RUN_DONE = "first_run_done"
+        private const val KEY_URI_CONNECTED = "uri_connected"
+        private const val KEY_URI_DISCONNECTED = "uri_disconnected"
+        private const val KEY_SERVICE_RUNNING = "service_running"
+        private const val KEY_LAST_SERVICE_START = "last_service_start"
+        private const val KEY_LAST_SERVICE_STOP = "last_service_stop"
+        private const val KEY_LAST_BOOT_RESTORE = "last_boot_restore"
+        private const val KEY_LAST_EVENT = "last_event"
+        private const val KEY_LAST_EVENT_AT = "last_event_at"
+        private const val KEY_LAST_PLAYBACK = "last_playback"
+        private const val KEY_LAST_ERROR = "last_error"
+        private const val KEY_LAST_RECOVERY = "last_recovery"
     }
 }

@@ -169,7 +169,7 @@ AGP 9.3.0.
 
 | Task | Result | Detail |
 |---|---|---|
-| `:app:testDebugUnitTest` | ✅ | **19/19 pass**, 0 failures, 0 errors |
+| `:app:testDebugUnitTest` | ✅ | **29/29 pass**, 0 failures, 0 errors |
 | `:app:assembleDebug` | ✅ | `app-debug.apk`, 18.4 MB |
 | `:app:assembleRelease` | ✅ | `app-release-unsigned.apk`, **1.3 MB** — R8 shrinks it ~14× |
 | `:app:lintDebug` | ✅ | 0 errors, 20 warnings |

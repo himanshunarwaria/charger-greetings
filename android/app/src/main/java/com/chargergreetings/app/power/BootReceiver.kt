@@ -3,53 +3,74 @@ package com.chargergreetings.app.power
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.chargergreetings.app.core.GreetingEngine
-import com.chargergreetings.app.core.SettingsRepository
 import com.chargergreetings.app.util.Diagnostics
 
 /**
- * Re-baselines the stored power state after a restart or an app update.
+ * Restores monitoring after a reboot or an app update.
  *
- * Without this, the first plug or unplug after every reboot would be judged
- * against whatever the state was before the phone went down — so unplugging the
- * charger while the phone was off and then booting would either produce a
- * greeting nobody asked for, or swallow the next real one.
+ * ### Why this is on the critical path
+ * Without it, every reboot silently ended monitoring until the user next opened
+ * the app -- one of the two failures this app was reported for.
  *
- * It deliberately never plays anything. Booting is not a power event the user
- * performed.
+ * BOOT_COMPLETED *is* on Android's implicit-broadcast exemption list (unlike the
+ * power broadcasts), so this receiver genuinely does fire even though the app
+ * has not been opened since boot. Receiving it also places the app on a
+ * temporary allowlist that permits starting a foreground service from the
+ * background, which is what makes the restore actually work on Android 12+.
  *
- * Note that this receiver does not "start" anything: there is no service and no
- * scheduled work. [PowerEventReceiver] is registered in the manifest and is
- * woken by the system on demand, so the app costs nothing between events.
+ * ### The honest limitation
+ * If the user force-stops the app from Settings, Android puts it in the stopped
+ * state and delivers *no* broadcasts at all, including this one, until the app
+ * is manually opened again. That is deliberate platform behaviour and no app
+ * can work around it. Several OEMs (Xiaomi, Oppo, Vivo, OnePlus) additionally
+ * gate BOOT_COMPLETED behind their own "auto-start" permission; the setup
+ * screen walks the user to that setting per manufacturer.
  */
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        when (intent.action) {
-            Intent.ACTION_BOOT_COMPLETED,
-            Intent.ACTION_MY_PACKAGE_REPLACED,
-            QUICKBOOT_POWERON,
-            HTC_QUICKBOOT_POWERON -> Unit
-            else -> return
-        }
+        val action = intent.action ?: return
+        val recognised = action == Intent.ACTION_BOOT_COMPLETED ||
+            action == Intent.ACTION_MY_PACKAGE_REPLACED ||
+            action == ACTION_LOCKED_BOOT_COMPLETED ||
+            action == QUICKBOOT_POWERON ||
+            action == HTC_QUICKBOOT_POWERON
+        if (!recognised) return
 
         val appContext = context.applicationContext
-        val settings = SettingsRepository(appContext)
-        val engine = GreetingEngine(settings)
+        val reason = action.substringAfterLast('.')
 
-        val observed = PowerStatus.read(appContext)
-        val note = engine.baseline(observed)
+        // goAsync: starting a service and touching SharedPreferences is quick,
+        // but a boot-time device is heavily contended and onReceive returning
+        // early could see the process killed mid-restore.
+        val pending = goAsync()
+        try {
+            // LOCKED_BOOT_COMPLETED arrives before the user unlocks, while
+            // credential-encrypted storage is still unavailable. This receiver
+            // is not directBootAware, so in practice we are only called for it
+            // on devices without file-based encryption -- but guard anyway
+            // rather than risk reading preferences that cannot be decrypted.
+            if (action == ACTION_LOCKED_BOOT_COMPLETED) {
+                Diagnostics.log(appContext, reason + ": waiting for unlock before restoring")
+                return
+            }
 
-        Diagnostics.log(appContext, "${intent.action?.substringAfterLast('.')}: $note")
-
-        // Get the reliable receiver running again from boot onward -- see
-        // PowerWatcherService for why a manifest receiver alone is not enough.
-        // BOOT_COMPLETED genuinely is on Android's exemption list, so this part
-        // does fire even though the app was never opened this boot.
-        if (settings.enabled) PowerWatcherService.start(appContext)
+            MonitoringController.restoreAfterBoot(appContext, reason)
+        } catch (e: Exception) {
+            // Never let a boot receiver crash: on some OEM builds a crash here
+            // gets the app flagged and excluded from future boot broadcasts.
+            Diagnostics.log(appContext, reason + ": restore threw -- " + e.message)
+        } finally {
+            try {
+                pending.finish()
+            } catch (_: Exception) {
+                // Nothing useful left to do if the result is already gone.
+            }
+        }
     }
 
     private companion object {
+        const val ACTION_LOCKED_BOOT_COMPLETED = "android.intent.action.LOCKED_BOOT_COMPLETED"
         const val QUICKBOOT_POWERON = "android.intent.action.QUICKBOOT_POWERON"
         const val HTC_QUICKBOOT_POWERON = "com.htc.intent.action.QUICKBOOT_POWERON"
     }

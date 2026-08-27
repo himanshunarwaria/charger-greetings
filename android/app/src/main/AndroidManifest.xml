@@ -17,17 +17,32 @@
 
       Deliberately NOT requested:
         INTERNET  - the app never makes a network call
-        WAKE_LOCK - not needed: the foreground service state itself already
-                    keeps the process from being suspended
-        REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
-                  - the battery-optimisation screen is opened via a plain
-                    Settings intent, which needs no permission and avoids the
-                    Play policy attached to that one
+        WAKE_LOCK - not needed: foreground-service state already keeps the
+                    process from being suspended, and the clip is ~1.6 s
+        Anything else - no accessibility service, no device admin, no storage
+                    permission (the Storage Access Framework grants per-file
+                    access without one)
     -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      REQUEST_IGNORE_BATTERY_OPTIMIZATIONS shows the one-tap system dialog that
+      exempts this app from Doze. It is load-bearing, not a convenience: on
+      Android 12+ an app that is NOT exempt cannot start a foreground service
+      from the background, which is exactly what the watchdog must do to repair
+      monitoring after an OEM kills it. Without it the app silently stops
+      working until reopened by hand, which is the bug this release fixes.
+
+      Play policy note: this permission is restricted to apps whose core
+      function requires continuous background execution. That is the case here
+      and must be declared in the Play listing if this is ever published.
+      The app still functions without the exemption; recovery just degrades to
+      "reopen the app", and the setup screen says so plainly.
+    -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -96,7 +111,14 @@
             android:directBootAware="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <!-- Some OEM ROMs send only one of these; accepting all three
+                <!-- LOCKED_BOOT_COMPLETED fires earlier, before first unlock.
+                     This receiver is not directBootAware, so on encrypted
+                     devices Android holds it until unlock; it is listed so
+                     devices without file-based encryption still restore
+                     promptly. BootReceiver defers on it rather than reading
+                     preferences that may not be decryptable yet. -->
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <!-- Some OEM ROMs send only one of these; accepting all of them
                      is the difference between working and not on those devices. -->
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
                 <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />

@@ -47,11 +47,19 @@ object PowerEventHandler {
             silenced = silenced
         )
 
+        // Recorded for the diagnostics panel so a user can see what the app
+        // decided and why, without needing adb or a developer.
+        settings.lastEventAt = System.currentTimeMillis()
+
         when (decision) {
-            is GreetingEngine.Decision.Silent ->
+            is GreetingEngine.Decision.Silent -> {
+                settings.lastEventDescription =
+                    "${claimed.name} (${kind.label}) - ${decision.reason}"
                 Diagnostics.log(appContext, "${claimed.name} (${kind.label}) -> ${decision.reason}")
+            }
 
             is GreetingEngine.Decision.Speak -> {
+                settings.lastEventDescription = "${claimed.name} (${kind.label}) - played"
                 Diagnostics.log(appContext, "${claimed.name} (${kind.label}) -> speaking")
                 speak(appContext, decision.greeting, settings)
             }
@@ -67,11 +75,21 @@ object PowerEventHandler {
                 GreetingPlayer(context).play(greeting, settings.volumePercent) ?: OK
             }
             when (outcome) {
-                OK -> Unit
-                null -> Diagnostics.log(context, "playback timed out")
-                else -> Diagnostics.log(context, "playback problem: $outcome")
+                OK -> {
+                    settings.lastPlaybackAt = System.currentTimeMillis()
+                    settings.lastError = null
+                }
+                null -> {
+                    settings.lastError = "Playback timed out (audio system did not respond)"
+                    Diagnostics.log(context, "playback timed out")
+                }
+                else -> {
+                    settings.lastError = "Playback problem: $outcome"
+                    Diagnostics.log(context, "playback problem: $outcome")
+                }
             }
         } catch (e: Exception) {
+            settings.lastError = "Playback failed: ${e.message}"
             Diagnostics.log(context, "playback threw: ${e.message}")
         }
     }

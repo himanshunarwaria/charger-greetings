@@ -1,13 +1,9 @@
 package com.chargergreetings.app
 
 import android.Manifest
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -20,7 +16,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.chargergreetings.app.ui.ChargerGreetingsTheme
 import com.chargergreetings.app.ui.SettingsScreen
+import com.chargergreetings.app.audio.SoundLibrary
+import com.chargergreetings.app.core.Greeting
 import com.chargergreetings.app.ui.SettingsViewModel
+import com.chargergreetings.app.util.Diagnostics
 
 /**
  * The app's only screen.
@@ -38,6 +37,26 @@ class MainActivity : ComponentActivity() {
     // this only controls whether its status notification is visible.
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /**
+     * Which greeting the in-flight document pick is for. Held here rather than
+     * passed through the contract because ActivityResultContracts.OpenDocument
+     * carries no user payload back.
+     */
+    private var pickingFor: Greeting? = null
+
+    /**
+     * OpenDocument, not GetContent: only OpenDocument returns a URI that can be
+     * given long-term access via takePersistableUriPermission. GetContent hands
+     * back a one-shot grant that stops working after a reboot, which would
+     * quietly break every custom sound the next morning.
+     */
+    private val pickSound =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            val target = pickingFor
+            pickingFor = null
+            if (target != null) viewModel.onSoundPicked(target, uri)
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -69,7 +88,12 @@ class MainActivity : ComponentActivity() {
                     onDelayChange = viewModel::setDelay,
                     onSilentModeChange = viewModel::setRespectSilentMode,
                     onTest = viewModel::test,
-                    onOpenBatterySettings = ::openBatteryOptimisationSettings,
+                    onStopPreview = viewModel::stopPreview,
+                    onPickSound = ::launchSoundPicker,
+                    onClearSound = viewModel::clearSound,
+                    onOpenBatterySettings = viewModel::openBatterySettings,
+                    onOpenNotificationSettings = viewModel::openNotificationSettings,
+                    onOpenAutoStartSettings = viewModel::openAutoStartSettings,
                     onResetDefaults = viewModel::resetToDefaults,
                     onClearLog = viewModel::clearLog,
                     onMessageShown = viewModel::dismissMessage
@@ -77,40 +101,18 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-
     /**
-     * Opens the battery-optimisation screen.
-     *
-     * Uses the plain settings intents rather than
-     * `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, which would require the
-     * `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` permission — a permission Google
-     * Play restricts to a short list of app categories this one is not in.
-     *
-     * Falls back through three increasingly generic targets, because OEM ROMs
-     * are inconsistent about which of these screens exist.
+     * Opens the system document picker for one greeting's sound.
+     * Battery-optimisation and auto-start screens are handled by SetupAdvisor
+     * via the view model, so all the OEM-specific fallbacks live in one place.
      */
-    private fun openBatteryOptimisationSettings() {
-        val candidates = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-            }
-            add(
-                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.fromParts("package", packageName, null)
-                }
-            )
-            add(Intent(Settings.ACTION_SETTINGS))
-        }
-
-        for (intent in candidates) {
-            try {
-                startActivity(intent)
-                return
-            } catch (_: ActivityNotFoundException) {
-                // Try the next one.
-            } catch (_: SecurityException) {
-                // Some ROMs guard these screens; fall through.
-            }
+    private fun launchSoundPicker(greeting: Greeting) {
+        pickingFor = greeting
+        try {
+            pickSound.launch(SoundLibrary.PICKER_MIME_TYPES)
+        } catch (e: Exception) {
+            pickingFor = null
+            Diagnostics.log(this, "Could not open the file picker: " + e.message)
         }
     }
 }

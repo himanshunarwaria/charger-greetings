@@ -47,12 +47,30 @@ class GreetingPlayer(context: Context) {
 
     private var focusRequest: AudioFocusRequest? = null
 
+    // Guards the currently-playing player so stop() and a second event cannot
+    // race, and so two greetings can never overlap.
+    private val activeLock = Any()
+    private var activePlayer: MediaPlayer? = null
+
     /**
      * Plays [greeting] and suspends until it finishes.
      *
      * @return null on success, or a short human-readable problem description.
      */
     suspend fun play(greeting: Greeting, volumePercent: Int): String? {
+        // A custom sound wins only if the user picked one AND it still opens.
+        // When it has gone missing we fall back to the bundled clip instead of
+        // going silent: a greeting the user can hear beats a correct error, and
+        // the missing file is surfaced separately in the UI and diagnostics.
+        val choice = SoundLibrary.choiceFor(appContext, greeting)
+        if (choice.isCustom && !choice.available) {
+            Diagnostics.log(
+                appContext,
+                "Custom sound unavailable, falling back to built-in: " + choice.label
+            )
+        }
+        val customUri = if (choice.available) choice.uri else null
+
         val resId = when (greeting) {
             Greeting.CONNECTED -> R.raw.power_connected
             Greeting.DISCONNECTED -> R.raw.power_disconnected
@@ -64,9 +82,12 @@ class GreetingPlayer(context: Context) {
 
             // Held in a val as well as the outer var: Kotlin will not smart-cast
             // a local var that is captured by the listener lambdas below.
-            val created = MediaPlayer.create(appContext, resId, attributes, generateSessionId())
+            val created = createPlayer(customUri, resId)
                 ?: return "the greeting audio could not be opened"
             player = created
+            // Tracked so a preview can be stopped on demand, and so a second
+            // event can never leave two clips overlapping.
+            synchronized(activeLock) { activePlayer = created }
 
             val gain = volumeToGain(volumePercent)
             created.setVolume(gain, gain)
@@ -104,11 +125,56 @@ class GreetingPlayer(context: Context) {
                 player?.setOnCompletionListener(null)
                 player?.setOnErrorListener(null)
                 player?.release()
-            } catch (_: Exception) {
-                // Releasing a player that already errored can throw; nothing to do.
+            } catch (e: Exception) {
+                // Releasing a player that already errored can throw.
+                Diagnostics.log(appContext, "Player release threw: " + e.message)
+            }
+            synchronized(activeLock) {
+                if (activePlayer === player) activePlayer = null
             }
             abandonFocus()
         }
+    }
+
+    /**
+     * Builds a MediaPlayer for the custom URI when there is one, falling back to
+     * the bundled raw resource. Returns null if neither can be opened.
+     */
+    private fun createPlayer(customUri: android.net.Uri?, resId: Int): MediaPlayer? {
+        if (customUri != null) {
+            try {
+                return MediaPlayer().apply {
+                    setAudioAttributes(attributes)
+                    setDataSource(appContext, customUri)
+                    prepare()
+                }
+            } catch (e: Exception) {
+                // Covers a file deleted between the availability check and here,
+                // an unsupported codec, and a revoked permission grant.
+                Diagnostics.log(
+                    appContext,
+                    "Custom sound failed to open (" + e.message + "); using built-in"
+                )
+            }
+        }
+        return MediaPlayer.create(appContext, resId, attributes, generateSessionId())
+    }
+
+    /**
+     * Stops a preview immediately. Used by the "Stop" button; safe to call when
+     * nothing is playing.
+     */
+    fun stop() {
+        synchronized(activeLock) {
+            val current = activePlayer ?: return
+            try {
+                if (current.isPlaying) current.stop()
+            } catch (e: IllegalStateException) {
+                Diagnostics.log(appContext, "Stop on a finished player: " + e.message)
+            }
+            activePlayer = null
+        }
+        abandonFocus()
     }
 
     /**

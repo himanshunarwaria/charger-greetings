@@ -2,7 +2,7 @@
 
 Kotlin · Jetpack Compose · Material 3 · minSdk 24 · targetSdk 36 · compileSdk 37
 
-> **Verified building.** `:app:testDebugUnitTest` (19/19 pass) and
+> **Verified building.** `:app:testDebugUnitTest` (29/29 pass) and
 > `:app:assembleDebug` both succeed on this machine.
 
 ## Toolchain
@@ -58,7 +58,7 @@ AGP 9 that is a hard error, not a warning.
 Once the wrapper exists:
 
 ```bash
-./gradlew :app:testDebugUnitTest     # 19 unit tests, no emulator needed
+./gradlew :app:testDebugUnitTest     # 29 unit tests, no emulator needed
 ./gradlew :app:assembleDebug         # app/build/outputs/apk/debug/
 ./gradlew :app:assembleRelease       # signed if keystore.properties exists
 ./gradlew :app:bundleRelease         # AAB for Play
@@ -184,7 +184,8 @@ app/src/main/java/com/chargergreetings/app/
 ├── ui/                          Compose settings screen, theme, view model
 └── util/Diagnostics.kt          size-capped local log
 
-app/src/test/…/GreetingEngineTest.kt   20 JVM tests for the rules
+app/src/test/…/GreetingEngineTest.kt        19 JVM tests for the rules
+app/src/test/…/BaselineAndRecoveryTest.kt   10 JVM tests for restart/reboot
 ```
 
 `GreetingEngine` is the piece worth reading. It has no Android imports at all,
