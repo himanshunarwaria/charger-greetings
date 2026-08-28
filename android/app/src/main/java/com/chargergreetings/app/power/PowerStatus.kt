@@ -110,6 +110,30 @@ object PowerStatus {
         return power.isIgnoringBatteryOptimizations(context.packageName)
     }
 
+
+    /** A battery reading reduced to the only two fields the alert cares about. */
+    data class BatteryReading(val level: Int, val plugged: Boolean)
+
+    /**
+     * Extracts level and plug state from an ACTION_BATTERY_CHANGED intent.
+     *
+     * Level is computed from EXTRA_LEVEL/EXTRA_SCALE rather than assuming a
+     * 0-100 scale: a few devices report a different scale and would otherwise
+     * produce nonsense percentages.
+     */
+    fun readBatteryLevel(intent: Intent): BatteryReading? {
+        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+        if (level < 0 || scale <= 0) return null
+        val percent = (level * 100f / scale).toInt().coerceIn(0, 100)
+        val plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0
+        return BatteryReading(percent, plugged)
+    }
+
+    /** Reads the current battery percentage from the sticky broadcast. */
+    fun currentBattery(context: Context): BatteryReading? =
+        stickyBattery(context)?.let { readBatteryLevel(it) }
+
     private fun stickyBattery(context: Context): Intent? = try {
         // A null receiver returns the cached sticky intent without registering
         // anything, so there is nothing to unregister and nothing left running.

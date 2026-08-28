@@ -4,28 +4,12 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
-import com.chargergreetings.app.core.Greeting
-import com.chargergreetings.app.core.SettingsRepository
 import com.chargergreetings.app.util.Diagnostics
 
-/** What sound a greeting will actually use, and whether it is usable. */
-data class SoundChoice(
-    val greeting: Greeting,
-    /** Null when the bundled clip is in use. */
-    val uri: Uri?,
-    /** Human-readable name for the UI. */
-    val label: String,
-    /** False when a custom sound was chosen but can no longer be opened. */
-    val available: Boolean,
-    /** Set when [available] is false, explaining what the user should do. */
-    val problem: String? = null
-) {
-    val isCustom: Boolean get() = uri != null
-}
 
 /**
- * Resolves which audio each greeting should play, and keeps custom picks
- * durable across reboots.
+ * Storage Access Framework helpers: taking, releasing and validating the
+ * long-term access that makes a user-picked file survive a reboot.
  *
  * ### Why persistable URI permissions matter here
  * A plain SAF pick grants read access only until the process dies. This app's
@@ -66,35 +50,6 @@ object SoundLibrary {
         } catch (e: SecurityException) {
             // Already gone; nothing to release.
             Diagnostics.log(context, "Nothing to release for " + uri + ": " + e.message)
-        }
-    }
-
-    /** Resolves the current choice for one greeting, including availability. */
-    fun choiceFor(context: Context, greeting: Greeting): SoundChoice {
-        val settings = SettingsRepository(context)
-        val stored = settings.soundUriFor(greeting)
-            ?: return SoundChoice(greeting, null, BUILT_IN_LABEL, available = true)
-
-        val uri = try {
-            Uri.parse(stored)
-        } catch (e: Exception) {
-            Diagnostics.log(context, "Stored sound URI is malformed: " + e.message)
-            return SoundChoice(
-                greeting, null, BUILT_IN_LABEL, available = false,
-                problem = "That saved sound could not be read. Pick it again."
-            )
-        }
-
-        val name = displayName(context, uri)
-        return if (canOpen(context, uri)) {
-            SoundChoice(greeting, uri, name, available = true)
-        } else {
-            SoundChoice(
-                greeting, uri, name, available = false,
-                problem = "This sound can no longer be opened. It may have been " +
-                    "moved, deleted, or on storage that is not available. " +
-                    "Pick it again, or clear it to use the built-in sound."
-            )
         }
     }
 

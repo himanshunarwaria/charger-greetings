@@ -18,11 +18,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BatteryAlert
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.NotificationsOff
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Power
 import androidx.compose.material.icons.filled.PowerOff
@@ -31,6 +27,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LargeTopAppBar
@@ -62,42 +59,46 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.chargergreetings.app.audio.SoundChoice
-import com.chargergreetings.app.core.Greeting
+import com.chargergreetings.app.core.PlaybackLimit
 import com.chargergreetings.app.core.PowerState
+import com.chargergreetings.app.core.QuietHours
+import com.chargergreetings.app.core.SoundSlot
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
- * The whole user interface: one scrolling screen.
+ * The whole interface: one scrolling screen.
  *
- * Ordering follows what a user actually opens this for:
- *   1. Is it working right now?   (status headline, always first)
- *   2. What is stopping it?       (setup card, only when something really is)
- *   3. Turn things on and off.
- *   4. Choose and hear the sounds.
- *   5. Fine detail, then diagnostics and troubleshooting.
+ * Layout follows what a user came here to do:
+ *   1. Is it working?            (status headline)
+ *   2. What is stopping it?      (setup card, only when something really is)
+ *   3. The three sound sections  (identical shape, one shared component)
+ *   4. General settings          (master switch, quiet hours, silent mode)
+ *   5. Status detail and troubleshooting, folded away by default
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     state: SettingsUiState,
-    onEnabledChange: (Boolean) -> Unit,
-    onConnectChange: (Boolean) -> Unit,
-    onDisconnectChange: (Boolean) -> Unit,
-    onVolumeChange: (Int) -> Unit,
-    onDelayChange: (Int) -> Unit,
-    onSilentModeChange: (Boolean) -> Unit,
-    onTest: (Greeting) -> Unit,
+    onMonitoringChange: (Boolean) -> Unit,
+    onSlotEnabledChange: (SoundSlot, Boolean) -> Unit,
+    onSlotVolumeChange: (SoundSlot, Int) -> Unit,
+    onSlotLimitChange: (SoundSlot, PlaybackLimit) -> Unit,
+    onChangeSound: (SoundSlot) -> Unit,
+    onResetSound: (SoundSlot) -> Unit,
+    onPreview: (SoundSlot) -> Unit,
     onStopPreview: () -> Unit,
-    onPickSound: (Greeting) -> Unit,
-    onClearSound: (Greeting) -> Unit,
+    onBatteryThresholdChange: (Int) -> Unit,
+    onRespectSilentChange: (Boolean) -> Unit,
+    onQuietHoursEnabledChange: (Boolean) -> Unit,
+    onQuietHoursStartChange: (Int) -> Unit,
+    onQuietHoursEndChange: (Int) -> Unit,
+    onRestartMonitoring: () -> Unit,
     onOpenBatterySettings: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
     onOpenAutoStartSettings: () -> Unit,
-    onResetDefaults: () -> Unit,
     onClearLog: () -> Unit,
     onMessageShown: () -> Unit
 ) {
@@ -139,118 +140,97 @@ fun SettingsScreen(
                 onOpenAutoStartSettings = onOpenAutoStartSettings
             )
 
-            if (state.respectSilentMode && state.deviceSilenced) {
-                WarningCard(
-                    icon = { Icon(Icons.Filled.NotificationsOff, contentDescription = null) },
-                    title = "Your phone is silenced",
-                    body = "Greetings are paused because the ringer is off, media volume " +
-                        "is at zero, or Do Not Disturb is on. Turn off " +
-                        "\"Respect silent mode\" below to play anyway."
-                )
-            }
+            SoundSection(
+                title = "Charger connected",
+                slotState = state.connected,
+                masterEnabled = state.enabled,
+                isPlaying = state.playingSlot == SoundSlot.CONNECTED,
+                onEnabledChange = { onSlotEnabledChange(SoundSlot.CONNECTED, it) },
+                onVolumeChange = { onSlotVolumeChange(SoundSlot.CONNECTED, it) },
+                onLimitChange = { onSlotLimitChange(SoundSlot.CONNECTED, it) },
+                onChangeSound = { onChangeSound(SoundSlot.CONNECTED) },
+                onResetSound = { onResetSound(SoundSlot.CONNECTED) },
+                onPreview = { onPreview(SoundSlot.CONNECTED) },
+                onStopPreview = onStopPreview
+            )
 
-            if (!state.hasAudioOutput) {
-                WarningCard(
-                    icon = { Icon(Icons.Filled.PowerOff, contentDescription = null) },
-                    title = "No audio output",
-                    body = "Android reports no speaker or headphones available right now."
-                )
-            }
+            SoundSection(
+                title = "Charger disconnected",
+                slotState = state.disconnected,
+                masterEnabled = state.enabled,
+                isPlaying = state.playingSlot == SoundSlot.DISCONNECTED,
+                onEnabledChange = { onSlotEnabledChange(SoundSlot.DISCONNECTED, it) },
+                onVolumeChange = { onSlotVolumeChange(SoundSlot.DISCONNECTED, it) },
+                onLimitChange = { onSlotLimitChange(SoundSlot.DISCONNECTED, it) },
+                onChangeSound = { onChangeSound(SoundSlot.DISCONNECTED) },
+                onResetSound = { onResetSound(SoundSlot.DISCONNECTED) },
+                onPreview = { onPreview(SoundSlot.DISCONNECTED) },
+                onStopPreview = onStopPreview
+            )
 
-            SectionCard(title = "Monitoring") {
-                SettingSwitch(
-                    label = "Charge sound monitoring",
-                    description = "The master switch. Stays on until you turn it off.",
-                    checked = state.enabled,
-                    onCheckedChange = onEnabledChange
+            SoundSection(
+                title = "Battery level alert",
+                slotState = state.battery,
+                masterEnabled = state.enabled,
+                isPlaying = state.playingSlot == SoundSlot.BATTERY_ALERT,
+                onEnabledChange = { onSlotEnabledChange(SoundSlot.BATTERY_ALERT, it) },
+                onVolumeChange = { onSlotVolumeChange(SoundSlot.BATTERY_ALERT, it) },
+                onLimitChange = { onSlotLimitChange(SoundSlot.BATTERY_ALERT, it) },
+                onChangeSound = { onChangeSound(SoundSlot.BATTERY_ALERT) },
+                onResetSound = { onResetSound(SoundSlot.BATTERY_ALERT) },
+                onPreview = { onPreview(SoundSlot.BATTERY_ALERT) },
+                onStopPreview = onStopPreview
+            ) {
+                // Threshold control, only meaningful for this section.
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Alert at ${state.batteryThreshold}%",
+                    style = MaterialTheme.typography.bodyLarge
                 )
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                SettingSwitch(
-                    label = "When the charger is connected",
-                    description = state.connectedSound?.label ?: "",
-                    checked = state.playOnConnect,
-                    enabled = state.enabled,
-                    onCheckedChange = onConnectChange
+                Text(
+                    "Plays once when charging reaches this level. It will not " +
+                        "play again until the battery drops below it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                SettingSwitch(
-                    label = "When the charger is removed",
-                    description = state.disconnectedSound?.label ?: "",
-                    checked = state.playOnDisconnect,
-                    enabled = state.enabled,
-                    onCheckedChange = onDisconnectChange
+                Slider(
+                    value = state.batteryThreshold.toFloat(),
+                    onValueChange = { onBatteryThresholdChange(it.roundToInt().coerceIn(1, 100)) },
+                    valueRange = 1f..100f,
+                    steps = 98,
+                    enabled = state.battery.enabled,
+                    modifier = Modifier.semantics {
+                        contentDescription = "Battery alert level"
+                        stateDescription = "${state.batteryThreshold} percent"
+                    }
                 )
-            }
-
-            SectionCard(title = "Sounds") {
-                SoundRow(
-                    title = "Connected sound",
-                    choice = state.connectedSound,
-                    isTesting = state.isTesting,
-                    onPick = { onPickSound(Greeting.CONNECTED) },
-                    onClear = { onClearSound(Greeting.CONNECTED) },
-                    onTest = { onTest(Greeting.CONNECTED) }
-                )
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider()
-                Spacer(Modifier.height(12.dp))
-                SoundRow(
-                    title = "Disconnected sound",
-                    choice = state.disconnectedSound,
-                    isTesting = state.isTesting,
-                    onPick = { onPickSound(Greeting.DISCONNECTED) },
-                    onClear = { onClearSound(Greeting.DISCONNECTED) },
-                    onTest = { onTest(Greeting.DISCONNECTED) }
-                )
-
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = onStopPreview,
-                    enabled = state.isTesting,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Icon(
-                        Icons.Filled.Stop, contentDescription = null,
-                        modifier = Modifier.size(18.dp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = state.batteryThreshold == 80,
+                        onClick = { onBatteryThresholdChange(80) },
+                        enabled = state.battery.enabled,
+                        label = { Text("80%") }
                     )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Stop preview")
+                    FilterChip(
+                        selected = state.batteryThreshold == 100,
+                        onClick = { onBatteryThresholdChange(100) },
+                        enabled = state.battery.enabled,
+                        label = { Text("100%") }
+                    )
                 }
-
-                Spacer(Modifier.height(16.dp))
-                SliderSetting(
-                    label = "Volume",
-                    valueLabel = "${state.volumePercent}%",
-                    spokenValue = "${state.volumePercent} percent",
-                    value = state.volumePercent.toFloat(),
-                    valueRange = 0f..100f,
-                    steps = 19,
-                    onValueChange = { onVolumeChange(it.roundToInt()) }
-                )
             }
 
-            SectionCard(title = "Behaviour") {
-                SliderSetting(
-                    label = "Delay before playing",
-                    valueLabel = if (state.delayMs == 0) "None"
-                    else "%.1f s".format(state.delayMs / 1000f),
-                    spokenValue = if (state.delayMs == 0) "no delay"
-                    else "${state.delayMs} milliseconds",
-                    value = state.delayMs.toFloat(),
-                    valueRange = 0f..3000f,
-                    steps = 11,
-                    onValueChange = { onDelayChange((it / 250f).roundToInt() * 250) }
-                )
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                SettingSwitch(
-                    label = "Respect silent mode",
-                    description = "Stay quiet when the ringer is off or Do Not Disturb is on",
-                    checked = state.respectSilentMode,
-                    onCheckedChange = onSilentModeChange
-                )
-            }
+            GeneralSection(
+                state = state,
+                onMonitoringChange = onMonitoringChange,
+                onRespectSilentChange = onRespectSilentChange,
+                onQuietHoursEnabledChange = onQuietHoursEnabledChange,
+                onQuietHoursStartChange = onQuietHoursStartChange,
+                onQuietHoursEndChange = onQuietHoursEndChange,
+                onRestartMonitoring = onRestartMonitoring
+            )
 
-            DiagnosticsCard(state.diagnostics, state.recentLog, onClearLog, onResetDefaults)
-
+            StatusDetailCard(state, onClearLog)
             TroubleshootingCard()
 
             Text(
@@ -258,11 +238,243 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 16.dp)
+                modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
             )
         }
+    }
+}
+
+/**
+ * One sound section. Used verbatim for all three slots; [extra] is the only
+ * place a section differs (the battery threshold control).
+ */
+@Composable
+private fun SoundSection(
+    title: String,
+    slotState: SlotUiState,
+    masterEnabled: Boolean,
+    isPlaying: Boolean,
+    onEnabledChange: (Boolean) -> Unit,
+    onVolumeChange: (Int) -> Unit,
+    onLimitChange: (PlaybackLimit) -> Unit,
+    onChangeSound: () -> Unit,
+    onResetSound: () -> Unit,
+    onPreview: () -> Unit,
+    onStopPreview: () -> Unit,
+    extra: @Composable (ColumnScope.() -> Unit)? = null
+) {
+    val controlsEnabled = masterEnabled && slotState.enabled
+
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = slotState.enabled,
+                    onCheckedChange = onEnabledChange,
+                    enabled = masterEnabled,
+                    modifier = Modifier.semantics {
+                        stateDescription = if (slotState.enabled) "On" else "Off"
+                    }
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Text(
+                slotState.soundLabel,
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (!slotState.soundAvailable) MaterialTheme.colorScheme.error
+                else MaterialTheme.colorScheme.onSurface
+            )
+            slotState.soundProblem?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = onChangeSound, modifier = Modifier.weight(1f)) {
+                    Text("Change sound")
+                }
+                OutlinedButton(
+                    onClick = if (isPlaying) onStopPreview else onPreview,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        if (isPlaying) Icons.Filled.Stop else Icons.Filled.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(if (isPlaying) "Stop" else "Preview")
+                }
+            }
+
+            if (slotState.isCustom) {
+                TextButton(onClick = onResetSound) { Text("Reset to default sound") }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("Volume", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "${slotState.volumePercent}%",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Slider(
+                value = slotState.volumePercent.toFloat(),
+                onValueChange = { onVolumeChange(it.roundToInt()) },
+                valueRange = 0f..100f,
+                steps = 19,
+                enabled = controlsEnabled,
+                modifier = Modifier.semantics {
+                    contentDescription = "$title volume"
+                    stateDescription = "${slotState.volumePercent} percent"
+                }
+            )
+
+            Text("Play for", style = MaterialTheme.typography.bodyMedium)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                PlaybackLimit.entries.forEach { limit ->
+                    FilterChip(
+                        selected = slotState.limit == limit,
+                        onClick = { onLimitChange(limit) },
+                        enabled = controlsEnabled,
+                        label = { Text(limit.label) }
+                    )
+                }
+            }
+
+            extra?.let {
+                Spacer(Modifier.height(8.dp))
+                HorizontalDivider()
+                it()
+            }
+        }
+    }
+}
+
+@Composable
+private fun GeneralSection(
+    state: SettingsUiState,
+    onMonitoringChange: (Boolean) -> Unit,
+    onRespectSilentChange: (Boolean) -> Unit,
+    onQuietHoursEnabledChange: (Boolean) -> Unit,
+    onQuietHoursStartChange: (Int) -> Unit,
+    onQuietHoursEndChange: (Int) -> Unit,
+    onRestartMonitoring: () -> Unit
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text(
+                "General",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(Modifier.height(8.dp))
+
+            SettingSwitch(
+                label = "Charge sound monitoring",
+                description = "The master switch. Stays on until you turn it off.",
+                checked = state.enabled,
+                onCheckedChange = onMonitoringChange
+            )
+
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+            SettingSwitch(
+                label = "Respect silent and vibrate mode",
+                description = "Stay quiet when the ringer is off or Do Not Disturb is on",
+                checked = state.respectSilentMode,
+                onCheckedChange = onRespectSilentChange
+            )
+
+            SettingSwitch(
+                label = "Quiet hours",
+                description = if (state.quietHours.enabled) {
+                    "No sounds between ${QuietHours.format(state.quietHours.startMinuteOfDay)} " +
+                        "and ${QuietHours.format(state.quietHours.endMinuteOfDay)}"
+                } else {
+                    "Silence sounds during a nightly window"
+                },
+                checked = state.quietHours.enabled,
+                onCheckedChange = onQuietHoursEnabledChange
+            )
+
+            if (state.quietHours.enabled) {
+                HourPicker(
+                    label = "Start",
+                    minuteOfDay = state.quietHours.startMinuteOfDay,
+                    onChange = onQuietHoursStartChange
+                )
+                HourPicker(
+                    label = "End",
+                    minuteOfDay = state.quietHours.endMinuteOfDay,
+                    onChange = onQuietHoursEndChange
+                )
+                Text(
+                    "Overnight windows work: 23:00 to 07:00 covers the night, not the day.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            state.suppressionReason?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Sounds are currently silenced: $it",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onRestartMonitoring) { Text("Restart monitoring") }
+        }
+    }
+}
+
+/**
+ * Hour-granularity picker. Deliberately hours only: quiet hours are a blunt
+ * instrument and a full time-picker dialog for "roughly bedtime" is more UI
+ * than the feature is worth.
+ */
+@Composable
+private fun HourPicker(label: String, minuteOfDay: Int, onChange: (Int) -> Unit) {
+    val hour = minuteOfDay / 60
+    Column(Modifier.padding(vertical = 4.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                QuietHours.format(minuteOfDay),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Slider(
+            value = hour.toFloat(),
+            onValueChange = { onChange(it.roundToInt().coerceIn(0, 23) * 60) },
+            valueRange = 0f..23f,
+            steps = 22,
+            modifier = Modifier.semantics {
+                contentDescription = "$label hour"
+                stateDescription = QuietHours.format(minuteOfDay)
+            }
+        )
     }
 }
 
@@ -276,20 +488,22 @@ private fun StatusCard(state: SettingsUiState) {
             if (plugged) "Plugged in via ${state.chargeKind.label}" else "Waiting for the charger",
             true
         )
-        MonitoringStatus.INACTIVE -> Triple(
-            "Monitoring off",
-            "Turn on the master switch below to start",
-            false
+        MonitoringStatus.DISABLED -> Triple(
+            "Monitoring off", "Turn on the master switch in General below", false
         )
-        MonitoringStatus.SETUP_REQUIRED -> Triple(
-            "Setup needed",
-            "Monitoring will stop after a few hours until this is fixed",
+        MonitoringStatus.BATTERY_OPTIMISED -> Triple(
+            "Battery optimisation may stop monitoring",
+            "Android will not let the app restart itself in the background",
             false
         )
         MonitoringStatus.PERMISSION_REQUIRED -> Triple(
-            "Permission needed",
-            "Notifications are blocked, so the monitor cannot show its status",
-            false
+            "Permission required", "Notifications are blocked", false
+        )
+        MonitoringStatus.SOUND_UNAVAILABLE -> Triple(
+            "Sound file unavailable", "One of your chosen sounds can no longer be opened", false
+        )
+        MonitoringStatus.SETUP_REQUIRED -> Triple(
+            "Setup required", "The monitoring service is not running", false
         )
     }
 
@@ -321,9 +535,9 @@ private fun StatusCard(state: SettingsUiState) {
             ) {
                 Icon(
                     imageVector = when {
-                        state.status == MonitoringStatus.ACTIVE && plugged -> Icons.Filled.Power
-                        state.status == MonitoringStatus.ACTIVE -> Icons.Filled.CheckCircle
-                        else -> Icons.Filled.Warning
+                        !good -> Icons.Filled.Warning
+                        plugged -> Icons.Filled.Power
+                        else -> Icons.Filled.CheckCircle
                     },
                     contentDescription = null,
                     tint = Color.White,
@@ -343,10 +557,7 @@ private fun StatusCard(state: SettingsUiState) {
     }
 }
 
-/**
- * Only appears when something genuinely needs doing. An always-present nag card
- * trains users to ignore it, which defeats the purpose.
- */
+/** Only shown when something genuinely needs doing; a permanent nag gets ignored. */
 @Composable
 private fun SetupCard(
     state: SettingsUiState,
@@ -366,19 +577,13 @@ private fun SetupCard(
         )
     ) {
         Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Filled.BatteryAlert, contentDescription = null)
-                Spacer(Modifier.width(12.dp))
-                Text("Keep monitoring alive", style = MaterialTheme.typography.titleSmall)
-            }
+            Text("Keep monitoring alive", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(8.dp))
 
             if (needsBattery) {
                 Text(
                     "Battery optimisation is on. This is the main reason charge " +
-                        "sounds stop working after a few hours: Android will not let " +
-                        "the app restart its monitor in the background while this is " +
-                        "enabled.",
+                        "sounds stop working after a few hours.",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 TextButton(onClick = onOpenBatterySettings) {
@@ -389,169 +594,81 @@ private fun SetupCard(
             if (needsNotifications) {
                 Text(
                     "Notifications are blocked. Monitoring still runs, but Android " +
-                        "requires a visible notification for it, and without one the " +
-                        "system is far more likely to shut the monitor down.",
+                        "requires a visible notification for it and is far more " +
+                        "likely to shut it down without one.",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                TextButton(onClick = onOpenNotificationSettings) {
-                    Text("Allow notifications")
-                }
+                TextButton(onClick = onOpenNotificationSettings) { Text("Allow notifications") }
             }
 
             state.oemGuidance?.let { guidance ->
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    guidance,
-                    style = MaterialTheme.typography.bodySmall
-                )
-                TextButton(onClick = onOpenAutoStartSettings) {
-                    Text("Open auto-start settings")
-                }
+                Text(guidance, style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = onOpenAutoStartSettings) { Text("Open auto-start settings") }
             }
         }
     }
 }
 
 @Composable
-private fun SoundRow(
-    title: String,
-    choice: SoundChoice?,
-    isTesting: Boolean,
-    onPick: () -> Unit,
-    onClear: () -> Unit,
-    onTest: () -> Unit
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Text(title, style = MaterialTheme.typography.bodyLarge)
-        Text(
-            choice?.label ?: "",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (choice?.available == false) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        if (choice?.available == false && choice.problem != null) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                choice.problem,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
-
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onPick, modifier = Modifier.weight(1f)) {
-                Text("Choose")
-            }
-            OutlinedButton(
-                onClick = onTest,
-                enabled = !isTesting,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(
-                    Icons.Filled.PlayArrow, contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(Modifier.width(4.dp))
-                Text("Play")
-            }
-            if (choice?.isCustom == true) {
-                OutlinedButton(onClick = onClear, modifier = Modifier.weight(1f)) {
-                    Text("Reset")
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DiagnosticsCard(
-    info: DiagnosticsInfo,
-    recentLog: List<String>,
-    onClearLog: () -> Unit,
-    onResetDefaults: () -> Unit
-) {
+private fun StatusDetailCard(state: SettingsUiState, onClearLog: () -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val info = state.diagnostics
 
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .semantics(mergeDescendants = true) {
-                        stateDescription = if (expanded) "Expanded" else "Collapsed"
-                    },
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Diagnostics",
+                    "Status detail",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.weight(1f)
                 )
                 TextButton(onClick = { expanded = !expanded }) {
                     Text(if (expanded) "Hide" else "Show")
-                    Icon(
-                        if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                        contentDescription = null
-                    )
                 }
             }
 
+            // The three facts worth seeing without expanding anything.
+            InfoRow("Monitoring service", if (info.serviceRunning) "Running" else "Not running")
+            InfoRow("Last charging event", info.lastEvent ?: "None yet")
+            InfoRow("Last sound played", formatTime(info.lastPlaybackAt))
+
             AnimatedVisibility(visible = expanded) {
                 Column {
-                    DiagnosticRow("Monitoring", if (info.monitoringEnabled) "Enabled" else "Disabled")
-                    DiagnosticRow("Service", if (info.serviceRunning) "Running" else "Not running")
-                    DiagnosticRow("Charging state", info.chargingState)
-                    DiagnosticRow("Last event", info.lastEvent ?: "None yet")
-                    DiagnosticRow("Last event at", formatTime(info.lastEventAt))
-                    DiagnosticRow("Last sound played", formatTime(info.lastPlaybackAt))
-                    DiagnosticRow("Service started", formatTime(info.lastServiceStartAt))
-                    DiagnosticRow("Service stopped", formatTime(info.lastServiceStopAt))
-                    DiagnosticRow("Restored after boot", formatTime(info.lastBootRestoreAt))
-                    DiagnosticRow("Last auto-recovery", formatTime(info.lastRecoveryAt))
-                    DiagnosticRow("Notifications", if (info.notificationsAllowed) "Allowed" else "Blocked")
-                    DiagnosticRow(
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                    InfoRow("Charging state", info.chargingState)
+                    InfoRow(
+                        "Battery level",
+                        if (info.batteryLevel >= 0) "${info.batteryLevel}%" else "Unknown"
+                    )
+                    InfoRow("Last event at", formatTime(info.lastEventAt))
+                    InfoRow("Service started", formatTime(info.lastServiceStartAt))
+                    InfoRow("Restored after restart", formatTime(info.lastBootRestoreAt))
+                    InfoRow("Last auto-recovery", formatTime(info.lastRecoveryAt))
+                    InfoRow("Notifications", if (info.notificationsAllowed) "Allowed" else "Blocked")
+                    InfoRow(
                         "Battery optimisation",
-                        if (info.batteryOptimised) "ON (will cause failures)" else "Off (good)"
+                        if (info.batteryOptimised) "On (may stop monitoring)" else "Off"
                     )
-                    DiagnosticRow("Connected sound", info.connectedSound)
-                    DiagnosticRow("Disconnected sound", info.disconnectedSound)
-                    DiagnosticRow("Last error", info.lastError ?: "None")
-                    DiagnosticRow("App", info.appVersion)
-                    DiagnosticRow("Android", info.androidVersion)
-                    DiagnosticRow("Device", info.device)
+                    InfoRow("Last problem", info.lastError ?: "None")
+                    InfoRow("App version", info.appVersion)
+                    InfoRow("Android", info.androidVersion)
+                    InfoRow("Device", info.device)
 
-                    Spacer(Modifier.height(12.dp))
-                    Text(
-                        "Recent activity",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    if (recentLog.isEmpty()) {
-                        Text(
-                            "Nothing yet. Plug the charger in and this will show what happened.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        recentLog.forEach { line ->
+                    if (state.recentLog.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        Text("Recent activity", style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.height(4.dp))
+                        state.recentLog.forEach { line ->
                             Text(
                                 line,
                                 style = MaterialTheme.typography.bodySmall,
                                 fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(vertical = 1.dp)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    }
-
-                    Spacer(Modifier.height(4.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(onClick = onClearLog) { Text("Clear log") }
-                        TextButton(onClick = onResetDefaults) { Text("Reset settings") }
+                        TextButton(onClick = onClearLog) { Text("Clear") }
                     }
                 }
             }
@@ -560,11 +677,9 @@ private fun DiagnosticsCard(
 }
 
 @Composable
-private fun DiagnosticRow(label: String, value: String) {
+private fun InfoRow(label: String, value: String) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text(
@@ -604,34 +719,29 @@ private fun TroubleshootingCard() {
                     TroubleItem(
                         "It stopped working after a few hours",
                         "Almost always battery optimisation. Set this app to " +
-                            "Unrestricted in Android's battery settings, and on Xiaomi, " +
-                            "Oppo, Vivo, OnePlus or Samsung also enable Auto-start. " +
-                            "Without the battery exemption Android forbids the app from " +
-                            "restarting its own monitor in the background."
+                            "Unrestricted, and on Xiaomi, Oppo, Vivo, OnePlus or " +
+                            "Samsung also enable Auto-start."
                     )
                     TroubleItem(
                         "It stopped after I force-stopped the app",
-                        "This one cannot be fixed by any app. When you Force stop an " +
-                            "app from Settings, Android puts it in a stopped state and " +
-                            "delivers it no broadcasts at all, including the boot " +
-                            "broadcast, until you open the app manually again. Open the " +
-                            "app once and it resumes."
+                        "No app can fix this. Force stop tells Android to deliver " +
+                            "the app nothing at all, including the restart signal, " +
+                            "until you open it again. Open it once and it resumes."
                     )
                     TroubleItem(
-                        "It did not resume after restarting my phone",
-                        "Open the app once. If it then works until the next reboot, " +
-                            "your manufacturer is blocking boot start: enable Auto-start " +
-                            "for this app in the settings linked above."
+                        "Preview works but real charging does not",
+                        "Audio is fine; background execution is not. Check the " +
+                            "battery and auto-start settings above."
                     )
                     TroubleItem(
-                        "The test button works but real charging does not",
-                        "That means audio is fine and background execution is not. " +
-                            "Check the battery and auto-start settings above."
+                        "My chosen sound stopped playing",
+                        "The file was probably moved or deleted. The section will " +
+                            "say so, and the built-in sound is used until you pick again."
                     )
                     TroubleItem(
-                        "It plays twice, or plays when it should not",
-                        "Send the Recent activity list above; every decision and the " +
-                            "reason for it is recorded there."
+                        "Nothing plays at night",
+                        "Check whether quiet hours are on, and whether your phone is " +
+                            "in silent or Do Not Disturb with \"Respect silent mode\" enabled."
                     )
                 }
             }
@@ -648,46 +758,6 @@ private fun TroubleItem(question: String, answer: String) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-    }
-}
-
-@Composable
-private fun WarningCard(
-    icon: @Composable () -> Unit,
-    title: String,
-    body: String
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer
-        )
-    ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                icon()
-                Spacer(Modifier.width(12.dp))
-                Text(title, style = MaterialTheme.typography.titleSmall)
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(body, style = MaterialTheme.typography.bodyMedium)
-        }
-    }
-}
-
-@Composable
-private fun SectionCard(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(Modifier.height(8.dp))
-            content()
-        }
     }
 }
 
@@ -728,41 +798,6 @@ private fun SettingSwitch(
     }
 }
 
-@Composable
-private fun SliderSetting(
-    label: String,
-    valueLabel: String,
-    spokenValue: String,
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    steps: Int,
-    onValueChange: (Float) -> Unit
-) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(label, style = MaterialTheme.typography.bodyLarge)
-            Text(
-                valueLabel,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Slider(
-            value = value,
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            steps = steps,
-            modifier = Modifier.semantics {
-                contentDescription = label
-                stateDescription = spokenValue
-            }
-        )
-    }
-}
-
 private fun formatTime(millis: Long): String =
     if (millis <= 0L) "Never"
-    else SimpleDateFormat("dd MMM, HH:mm:ss", Locale.getDefault()).format(Date(millis))
+    else SimpleDateFormat("d MMM, HH:mm", Locale.getDefault()).format(Date(millis))

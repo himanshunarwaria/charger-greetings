@@ -15,7 +15,7 @@ import androidx.core.content.edit
  *
  * Nothing in this file leaves the device.
  */
-class SettingsRepository(context: Context) : GreetingStore {
+class SettingsRepository(context: Context) : GreetingStore, BatteryAlertStore {
 
     private val prefs: SharedPreferences =
         context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
@@ -152,6 +152,111 @@ class SettingsRepository(context: Context) : GreetingStore {
         get() = prefs.getLong(KEY_LAST_RECOVERY, 0L)
         set(value) = prefs.edit { putLong(KEY_LAST_RECOVERY, value) }
 
+
+    // --- per-slot sound configuration ---------------------------------------
+    //
+    // Keys are namespaced by slot ("sound_connected_volume" etc.) so the three
+    // sections are genuinely independent: changing one can never touch another.
+    // Legacy single-value keys are migrated on first read, below.
+
+    fun slotConfig(slot: SoundSlot): SlotConfig = SlotConfig(
+        slot = slot,
+        enabled = slotEnabled(slot),
+        source = slotSource(slot),
+        volumePercent = slotVolume(slot),
+        limit = slotLimit(slot)
+    )
+
+    fun slotEnabled(slot: SoundSlot): Boolean = when (slot) {
+        // The two charger events keep their original keys so an upgrading user
+        // does not silently lose their on/off choices.
+        SoundSlot.CONNECTED -> playOnConnect
+        SoundSlot.DISCONNECTED -> playOnDisconnect
+        SoundSlot.BATTERY_ALERT -> prefs.getBoolean(KEY_BATTERY_ENABLED, false)
+    }
+
+    fun setSlotEnabled(slot: SoundSlot, value: Boolean) = when (slot) {
+        SoundSlot.CONNECTED -> playOnConnect = value
+        SoundSlot.DISCONNECTED -> playOnDisconnect = value
+        SoundSlot.BATTERY_ALERT -> prefs.edit { putBoolean(KEY_BATTERY_ENABLED, value) }
+    }
+
+    fun slotSource(slot: SoundSlot): SoundSource {
+        val stored = prefs.getString(key(slot, "source"), null)
+        SoundSource.parse(stored)?.let { return it }
+
+        // Migration: v1.0 stored a bare content URI under uri_connected /
+        // uri_disconnected. Read it once so an upgrading user keeps their pick.
+        val legacy = when (slot) {
+            SoundSlot.CONNECTED -> prefs.getString(KEY_URI_CONNECTED, null)
+            SoundSlot.DISCONNECTED -> prefs.getString(KEY_URI_DISCONNECTED, null)
+            SoundSlot.BATTERY_ALERT -> null
+        }
+        if (!legacy.isNullOrBlank()) return SoundSource.FileUri(legacy)
+
+        return SoundSource.BuiltIn(slot.defaultBuiltIn)
+    }
+
+    fun setSlotSource(slot: SoundSlot, source: SoundSource) {
+        prefs.edit { putString(key(slot, "source"), source.serialise()) }
+        // Clear the legacy key so the migration above cannot resurrect an old
+        // pick after the user has explicitly chosen something new.
+        when (slot) {
+            SoundSlot.CONNECTED -> prefs.edit { remove(KEY_URI_CONNECTED) }
+            SoundSlot.DISCONNECTED -> prefs.edit { remove(KEY_URI_DISCONNECTED) }
+            SoundSlot.BATTERY_ALERT -> Unit
+        }
+    }
+
+    fun resetSlotSource(slot: SoundSlot) =
+        setSlotSource(slot, SoundSource.BuiltIn(slot.defaultBuiltIn))
+
+    fun slotVolume(slot: SoundSlot): Int =
+        prefs.getInt(key(slot, "volume"), volumePercent).coerceIn(0, 100)
+
+    fun setSlotVolume(slot: SoundSlot, value: Int) =
+        prefs.edit { putInt(key(slot, "volume"), value.coerceIn(0, 100)) }
+
+    fun slotLimit(slot: SoundSlot): PlaybackLimit =
+        PlaybackLimit.fromMillis(prefs.getLong(key(slot, "limit"), 0L))
+
+    fun setSlotLimit(slot: SoundSlot, limit: PlaybackLimit) =
+        prefs.edit { putLong(key(slot, "limit"), limit.millis) }
+
+    private fun key(slot: SoundSlot, field: String) = "sound_${slot.storageKey}_$field"
+
+    // --- quiet hours ---------------------------------------------------------
+
+    var quietHours: QuietHours
+        get() = QuietHours(
+            enabled = prefs.getBoolean(KEY_QUIET_ENABLED, false),
+            startMinuteOfDay = prefs.getInt(KEY_QUIET_START, 23 * 60),
+            endMinuteOfDay = prefs.getInt(KEY_QUIET_END, 7 * 60)
+        )
+        set(value) = prefs.edit {
+            putBoolean(KEY_QUIET_ENABLED, value.enabled)
+            putInt(KEY_QUIET_START, value.startMinuteOfDay)
+            putInt(KEY_QUIET_END, value.endMinuteOfDay)
+        }
+
+    // --- battery alert -------------------------------------------------------
+
+    var batteryThresholdPercent: Int
+        get() = prefs.getInt(KEY_BATTERY_THRESHOLD, 80).coerceIn(1, 100)
+        set(value) = prefs.edit { putInt(KEY_BATTERY_THRESHOLD, value.coerceIn(1, 100)) }
+
+    fun batteryAlertConfig() = BatteryAlertConfig(
+        enabled = slotEnabled(SoundSlot.BATTERY_ALERT),
+        thresholdPercent = batteryThresholdPercent
+    )
+
+    // commit(), not apply(): this is the flag that prevents a duplicate alert,
+    // and the process can be killed the instant playback starts.
+    @Suppress("ApplySharedPref")
+    override var batteryAlertArmed: Boolean
+        get() = prefs.getBoolean(KEY_BATTERY_ARMED, true)
+        set(value) { prefs.edit().putBoolean(KEY_BATTERY_ARMED, value).commit() }
+
     // --- helpers ------------------------------------------------------------
 
     fun config(): GreetingConfig = GreetingConfig(
@@ -200,5 +305,11 @@ class SettingsRepository(context: Context) : GreetingStore {
         private const val KEY_LAST_PLAYBACK = "last_playback"
         private const val KEY_LAST_ERROR = "last_error"
         private const val KEY_LAST_RECOVERY = "last_recovery"
+        private const val KEY_QUIET_ENABLED = "quiet_enabled"
+        private const val KEY_QUIET_START = "quiet_start"
+        private const val KEY_QUIET_END = "quiet_end"
+        private const val KEY_BATTERY_ENABLED = "battery_enabled"
+        private const val KEY_BATTERY_THRESHOLD = "battery_threshold"
+        private const val KEY_BATTERY_ARMED = "battery_armed"
     }
 }

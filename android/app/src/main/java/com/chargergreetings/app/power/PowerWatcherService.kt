@@ -57,6 +57,10 @@ class PowerWatcherService : Service() {
     private var receiver: BroadcastReceiver? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    // Last (level, plugged) actually seen, so the flood of BATTERY_CHANGED
+    // ticks that carry no change never reaches the engine or the log.
+    private var lastBatteryReading: PowerStatus.BatteryReading? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -150,14 +154,39 @@ class PowerWatcherService : Service() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
+            // ACTION_BATTERY_CHANGED can ONLY be received by a dynamically
+            // registered receiver -- Android refuses it in a manifest entirely.
+            // It is also very chatty (many times a minute while charging),
+            // which is why BatteryAlertEngine is edge-triggered rather than
+            // level-triggered, and why nothing here is logged per reading.
+            addAction(Intent.ACTION_BATTERY_CHANGED)
         }
 
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
-                val greeting = PowerEventHandler.actionToGreeting(intent.action) ?: return
-                // onReceive has a short budget of its own; hand off to the
-                // service scope so a configured delay cannot be cut short.
-                scope.launch { PowerEventHandler.handle(applicationContext, greeting) }
+                when (intent.action) {
+                    Intent.ACTION_BATTERY_CHANGED -> {
+                        val reading = PowerStatus.readBatteryLevel(intent) ?: return
+                        // Cheap in-memory filter: only wake the coroutine when
+                        // the level or plug state actually moved. Everything
+                        // else is one of the many voltage/temperature ticks.
+                        if (reading == lastBatteryReading) return
+                        lastBatteryReading = reading
+                        scope.launch {
+                            PowerEventHandler.handleBatteryLevel(
+                                applicationContext, reading.level, reading.plugged
+                            )
+                        }
+                    }
+
+                    else -> {
+                        val greeting = PowerEventHandler.actionToGreeting(intent.action) ?: return
+                        // onReceive has a short budget of its own; hand off to
+                        // the service scope so a configured delay or duration
+                        // limit cannot be cut short.
+                        scope.launch { PowerEventHandler.handle(applicationContext, greeting) }
+                    }
+                }
             }
         }
         receiver = r

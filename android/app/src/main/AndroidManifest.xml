@@ -44,6 +44,15 @@
     -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!--
+      RECORD_AUDIO is requested at runtime ONLY when the user taps "Record your
+      voice", never at launch. The microphone is opened solely from that screen:
+      no service, receiver or worker can reach VoiceRecorder, so the app cannot
+      record in the background even by mistake. Recordings are written to
+      app-private storage and are removed when the app is uninstalled.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"

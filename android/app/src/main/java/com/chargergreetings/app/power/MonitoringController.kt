@@ -1,6 +1,7 @@
 package com.chargergreetings.app.power
 
 import android.content.Context
+import com.chargergreetings.app.core.BatteryAlertEngine
 import com.chargergreetings.app.core.GreetingEngine
 import com.chargergreetings.app.core.SettingsRepository
 import com.chargergreetings.app.util.Diagnostics
@@ -97,6 +98,19 @@ object MonitoringController {
         val observed = PowerStatus.read(appContext)
         val note = engine.baseline(observed)
         Diagnostics.log(appContext, "$reason: $note")
+
+        // The battery alert needs its own baseline for the same reason: without
+        // it, rebooting while sitting at 100% on the charger would fire the
+        // alert immediately, which the brief explicitly forbids.
+        val battery = PowerStatus.currentBattery(appContext)
+        if (battery != null) {
+            val batteryNote = BatteryAlertEngine(settings).baseline(
+                level = battery.level,
+                plugged = battery.plugged,
+                config = settings.batteryAlertConfig()
+            )
+            Diagnostics.log(appContext, "$reason: $batteryNote")
+        }
     }
 
     /**
