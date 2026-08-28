@@ -12,9 +12,10 @@ package com.chargergreetings.app.core
  * So the alert is **edge-triggered**, not level-triggered, using a single
  * persisted `armed` flag:
  *
- * - Below the threshold, or unplugged  -> re-arm.
- * - Plugged, at/above threshold, armed -> fire once, then disarm.
+ * - Below the threshold (plugged or not)  -> re-arm.
+ * - Plugged, at/above threshold, armed     -> fire once, then disarm.
  * - Plugged, at/above threshold, not armed -> silence.
+ * - Unplugged                              -> always silent.
  *
  * That yields exactly one alert per genuine crossing, and a replay only after
  * the battery has actually dropped back below the threshold.
@@ -47,20 +48,20 @@ class BatteryAlertEngine(private val store: BatteryAlertStore) {
         if (!config.enabled) return Decision.Silent("battery alert is off")
         if (level < 0 || level > 100) return Decision.Silent("implausible level $level")
 
-        // Unplugged: re-arm and stay quiet. This is what makes "unplug, drain,
-        // plug back in" produce a fresh alert on the next crossing.
-        if (!plugged) {
-            if (!store.batteryAlertArmed) {
-                store.batteryAlertArmed = true
-            }
-            return Decision.Silent("not charging")
+        // Arming is a statement about the LEVEL, not about the plug. Re-arming
+        // merely because the cable came out would fire a fresh alert the next
+        // time it went back in, even though the battery never dropped below the
+        // threshold -- breaking the promise made at the top of this class, and
+        // the brief's "only once when the battery reaches or crosses" rule.
+        // Unplug at 100%, plug straight back in: nothing was reached, so the
+        // alert must stay quiet.
+        if (level < config.thresholdPercent && !store.batteryAlertArmed) {
+            store.batteryAlertArmed = true
         }
 
+        if (!plugged) return Decision.Silent("not charging")
+
         if (level < config.thresholdPercent) {
-            // Dropped back below: arm for the next crossing.
-            if (!store.batteryAlertArmed) {
-                store.batteryAlertArmed = true
-            }
             return Decision.Silent("below threshold ($level% < ${config.thresholdPercent}%)")
         }
 
@@ -89,10 +90,10 @@ class BatteryAlertEngine(private val store: BatteryAlertStore) {
      *
      * If the battery is already at or above the threshold we start *disarmed*,
      * which is what stops an alert firing merely because the phone rebooted
-     * while sitting at 100%.
+     * while sitting at 100% -- whether or not the cable is in.
      */
     fun baseline(level: Int, plugged: Boolean, config: BatteryAlertConfig): String {
-        val armed = !plugged || level < config.thresholdPercent
+        val armed = level < config.thresholdPercent
         store.batteryAlertArmed = armed
         return if (armed) {
             "battery alert armed (at $level%, threshold ${config.thresholdPercent}%)"

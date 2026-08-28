@@ -216,19 +216,23 @@ All 19 in `app/src/test/.../GreetingEngineTest.kt`. Plain JVM — no emulator.
 
 ---
 
-## 6. Android — needs a device
+## 6. Android — emulator-verified and device-pending
+
+Run against the **signed release APK** v1.2.1 on an Android 36 emulator
+(Google APIs, x86_64). ✅ here means observed on that build; ⬜ still needs a
+real phone, which is where OEM power management lives.
 
 | Test | Status | Note |
 |---|---|---|
-| Installs and launches on a phone | ⬜ | |
-| Connect / disconnect with **AC charger** | ⬜ | |
+| Installs and launches on a phone | ✅ | Emulator; the v1.2.0 build failed this outright |
+| Connect / disconnect with **AC charger** | ✅ | Each fires exactly once |
 | Connect / disconnect over **USB** | ⬜ | |
 | Connect / disconnect on a **wireless charger** | ⬜ | |
-| Works with the app closed | ⬜ | Open it once first — see README |
+| Works with the app closed | ✅ | Emulator; open it once first — see README |
 | Works with the app swiped from Recents | ⬜ | |
-| Survives a **reboot** — plug in after restarting | ⬜ | |
-| **Does not** greet when unplugged while the phone was off | ⬜ | |
-| Opening the app while charging plays nothing | ⬜ | Covered by unit test #5, unverified on device |
+| Survives a **reboot** — plug in after restarting | ✅ | Emulator; service restored, app never opened |
+| **Does not** greet when unplugged while the phone was off | ✅ | Emulator; baselines silently on boot |
+| Opening the app while charging plays nothing | ✅ | Emulator; baselines silently on open |
 | Force-stop → no greetings until reopened | ⬜ | Expected Android behaviour, not a bug |
 | Silent mode / DND suppresses greetings | ⬜ | |
 | Media volume at zero suppresses greetings | ⬜ | |

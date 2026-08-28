@@ -1,6 +1,48 @@
-# Sound customisation and battery alert (v1.2.0)
+# Sound customisation and battery alert (v1.2.0, fixed in v1.2.1)
 
 What was added on top of the v1.1.0 reliability work, and the decisions behind it.
+
+---
+
+## 0. v1.2.1 -- the release build could not start at all
+
+v1.2.0 crashed on launch for every user, every time. The cause was not in this
+app's logic; it was a shrinker rule, and it deserves recording because the
+mistake that let it ship was a process one.
+
+```
+java.lang.RuntimeException: Unable to get provider androidx.startup.InitializationProvider
+Caused by: java.lang.NoSuchMethodException: androidx.work.impl.WorkDatabase_Impl.<init> []
+    at androidx.work.WorkManagerInitializer.b(SourceFile:97)
+```
+
+WorkManager -- added in v1.1.0 for the watchdog -- keeps its queue in a Room
+database, and Room instantiates the generated `WorkDatabase_Impl` reflectively.
+room-runtime 2.6.1 ships only `-keep class * extends androidx.room.RoomDatabase`,
+with no member specification. Under **R8 full mode**, the default since AGP 8,
+that keeps the class but *not* its members, so the no-arg constructor was
+deleted. The failure happens inside `handleBindApplication`, before
+`Application.onCreate` and before any of our code, so there was nothing the app
+could do to survive it. `app/proguard-rules.pro` now adds the member
+specification itself, which also makes the app immune to whichever Room version
+a future dependency drags in.
+
+**Why it shipped:** minification only runs in the release build, and every test
+to that point had been run on the debug build, where R8 is off. v1.1.0 and
+v1.2.0 were published without the release APK ever being launched once. The
+fix for that is not a rule, it is the emulator run now recorded in section 6.
+
+Two smaller defects were found by running the release build and are fixed in
+the same version:
+
+- **The battery alert fired on re-plugging above the threshold.** Unplugging
+  re-armed the alert regardless of level, so unplug-at-100% then plug straight
+  back in produced an alert although nothing had been reached. This contradicted
+  both the brief and `BatteryAlertEngine`'s own class documentation. Arming is
+  now a statement about the level alone. Two tests added.
+- **The "10 seconds" chip rendered one letter per line.** Four duration chips do
+  not fit one row on a phone; the row squeezed the last one to a single
+  character's width. Now a `FlowRow` that wraps.
 
 ---
 
@@ -164,13 +206,13 @@ one), no `INTERNET`, no accessibility service, no device admin, no overlay.
 
 ## 5. Test results
 
-**55/55 unit tests pass.**
+**57/57 unit tests pass.**
 
 | Suite | Tests | Covers |
 |---|---|---|
 | `GreetingEngineTest` | 19 | Original charger event rules |
 | `BaselineAndRecoveryTest` | 10 | Restart/reboot silence |
-| `BatteryAlertEngineTest` | **17** | One-shot alert, re-arming, baseline, suppression |
+| `BatteryAlertEngineTest` | **19** | One-shot alert, re-arming, baseline, suppression |
 | `QuietHoursTest` | **9** | Same-day and midnight-crossing windows |
 
 Notable cases now pinned by tests:
@@ -185,22 +227,48 @@ Builds: `assembleDebug` 18.9 MB, `assembleRelease` **1.9 MB** (R8), lint **0 err
 
 ---
 
-## 6. Physical-device tests still required
+## 6. What has actually been run, and on what
 
-None of the below has run on hardware — the test phone was disconnected
-throughout this work.
+Everything below was executed against the **signed release APK** (v1.2.1,
+versionCode 4) on an Android 36 emulator (Google APIs, x86_64). "Release" is the
+important word: these are the first runs of a minified build this project has
+ever had, and they are what caught the launch crash.
+
+### Verified on the emulator
+
+| Area | Result |
+|---|---|
+| Cold launch | Opens, UI renders, Devanagari draws correctly |
+| Foreground service | `isForeground=true`, `types=0x40000000` (specialUse), silent ongoing notification |
+| Charger connected | Fires once per event |
+| Charger disconnected | Fires once per event |
+| Battery alert, genuine crossing | 60 → 80% with the threshold at 80: exactly one alert |
+| Battery alert, chatty broadcasts | 81, 82, 83, 84, 85%: silent |
+| Battery alert, re-arm | Drop to 70, charge back to 80: one further alert |
+| Battery alert, re-plug above threshold | Unplug at 85, plug back in at 85: **silent** (the v1.2.1 fix) |
+| Battery alert while unplugged | Levels 85, 95 with no cable: silent |
+| Reboot | `BOOT_COMPLETED` restores monitoring with the app never opened |
+| Reboot, no phantom sound | Baselines silently; alert held at 100% rather than firing |
+| Charger events after reboot | Both directions fire, app still never opened |
+| Crashes across all of the above | Zero |
+
+### Still needs a real phone
+
+An emulator cannot speak to OEM power management, and that is precisely where
+this app's hard problems live.
 
 | Area | Test |
 |---|---|
-| Sound selection | Pick a built-in, a file, and a recording for each of the three slots independently |
-| Persistence | Restart the app, then the phone; confirm a picked file still plays |
-| Missing file | Delete the chosen file; confirm fallback + the section flags it |
+| Endurance | Overnight run, Doze, battery saver, OEM battery manager |
+| Process death | App killed, removed from Recents, watchdog repair after ~15 min |
+| Sound selection | A built-in, a file and a recording per slot, independently |
+| Persistence | Reboot, then confirm a SAF-picked file still plays |
+| Missing file | Delete the chosen file; confirm fallback and the flag in the section |
 | Recording | Record, pause, stop, preview, re-record, save, delete; deny the mic permission |
-| Playback | Each duration limit; start one sound during another; rapid preview/stop; close the screen mid-preview |
-| Battery alert | Cross the threshold while charging; repeated broadcasts at the same level; drop below and cross again; reboot at threshold; confirm silence while unplugged |
-| Quiet hours | Same-day window, overnight window, confirm no catch-up sound afterwards |
+| Playback | Each duration limit; one sound starting during another; rapid preview/stop |
+| Quiet hours | Same-day and overnight windows; confirm no catch-up sound |
 | Silent mode | Normal / vibrate / silent, with the setting on and off |
-| Reliability | Overnight run, Doze, battery saver, app killed, removed from Recents |
+| Audio output | The emulator ran with audio disabled, so playback was confirmed by the app's own trace and "Last sound played", not by ear |
 
 ADB helpers:
 
@@ -208,7 +276,8 @@ ADB helpers:
 adb shell dumpsys battery set level 79      # then 80 to cross the threshold
 adb shell dumpsys battery set ac 1
 adb shell dumpsys battery reset             # ALWAYS finish with this
-adb shell run-as com.chargergreetings.app cat files/diagnostics.log
+adb logcat -s ChargerGreetings              # works on a release build too
+adb logcat -b crash -d                      # the buffer that caught v1.2.0
 ```
 
 ---
@@ -242,7 +311,7 @@ adb shell run-as com.chargergreetings.app cat files/diagnostics.log
 | Volume and duration per slot | ✅ |
 | Quiet hours crosses midnight | ✅ 9 tests |
 | Silent mode independent of quiet hours | ✅ bug found and fixed in review |
-| Battery alert once per crossing | ✅ 17 tests |
+| Battery alert once per crossing | ✅ 19 tests, verified on the release build |
 | No false sound after boot/restore | ✅ battery baseline added |
 | Only one sound at a time | ✅ process-wide active player |
 | Interrupted playback resumes its caller | ✅ bug found and fixed in review |
@@ -250,5 +319,7 @@ adb shell run-as com.chargergreetings.app cat files/diagnostics.log
 | No duplicate services/receivers/workers | ✅ single controller, unique work name |
 | Master switch preserves settings | ✅ |
 | Builds clean, lint 0 errors | ✅ |
-| Unit tests | ✅ 55/55 |
-| **Physical-device testing** | ⬜ **outstanding** |
+| **Release build launches** | ✅ **the v1.2.0 crash, fixed and verified** |
+| Unit tests | ✅ 57/57 |
+| Emulator testing of the signed release build | ✅ see section 6 |
+| **Physical-device testing (OEM power management)** | ⬜ **outstanding** |

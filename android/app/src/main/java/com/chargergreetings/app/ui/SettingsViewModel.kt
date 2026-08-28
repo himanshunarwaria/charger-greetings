@@ -21,6 +21,7 @@ import com.chargergreetings.app.power.PowerStatus
 import com.chargergreetings.app.power.PowerWatcherService
 import com.chargergreetings.app.power.SetupAdvisor
 import com.chargergreetings.app.power.SoundSuppression
+import com.chargergreetings.app.power.WatchdogWorker
 import com.chargergreetings.app.util.Diagnostics
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -125,24 +126,49 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     val state: StateFlow<SettingsUiState> = _state.asStateFlow()
 
     init {
-        // Opening the app records the current power and battery state but never
-        // plays. This is what stops a launch producing a phantom sound.
-        val reason = if (!settings.hasCompletedFirstRun) "first run" else "app opened"
-        MonitoringController.baselineSilently(application, reason)
-        settings.hasCompletedFirstRun = true
+        // Every side effect here is individually guarded. This runs inside
+        // ViewModel construction during onCreate, so ANYTHING that throws takes
+        // the whole app down before a single pixel is drawn -- and these calls
+        // touch WorkManager, the ActivityManager, SharedPreferences and the
+        // ContentResolver, any of which can fail on some device or OEM build.
+        // A degraded screen that opens beats a crash that hides the reason.
+        runCatching {
+            // Opening the app records the current power and battery state but
+            // never plays. This is what stops a launch making a phantom sound.
+            val reason = if (!settings.hasCompletedFirstRun) "first run" else "app opened"
+            MonitoringController.baselineSilently(application, reason)
+            settings.hasCompletedFirstRun = true
+        }.onFailure { logStartupProblem("baseline", it) }
 
-        if (settings.enabled) {
+        if (runCatching { settings.enabled }.getOrDefault(false)) {
             // KEEP semantics, so this can never stack duplicate work. Needed on
             // every open so an upgrade from a build without a watchdog still
             // gets one scheduled.
-            com.chargergreetings.app.power.WatchdogWorker.enqueue(application)
-            if (!PowerWatcherService.isRunning(application)) {
-                Diagnostics.log(application, "App opened: service was down, restarting")
-                MonitoringController.enable(application)
-            }
+            runCatching { WatchdogWorker.enqueue(application) }
+                .onFailure { logStartupProblem("watchdog scheduling", it) }
+
+            runCatching {
+                if (!PowerWatcherService.isRunning(application)) {
+                    Diagnostics.log(application, "App opened: service was down, restarting")
+                    MonitoringController.enable(application)
+                }
+            }.onFailure { logStartupProblem("starting the monitor", it) }
         }
 
-        refresh()
+        runCatching { refresh() }.onFailure { logStartupProblem("reading settings", it) }
+    }
+
+    /**
+     * Records a startup failure where the user can actually see it, instead of
+     * letting it become a silent crash.
+     */
+    private fun logStartupProblem(what: String, error: Throwable) {
+        val message = "Problem while $what: ${error.message ?: error::class.java.simpleName}"
+        runCatching {
+            Diagnostics.log(getApplication(), message)
+            settings.lastError = message
+        }
+        _state.update { it.copy(message = message) }
     }
 
     fun refresh() {

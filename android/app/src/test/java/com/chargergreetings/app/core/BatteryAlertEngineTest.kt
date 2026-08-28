@@ -73,10 +73,22 @@ class BatteryAlertEngineTest {
     }
 
     @Test
-    fun `unplugging re-arms so the next charge cycle alerts again`() {
+    fun `unplugging above the threshold does not re-arm`() {
+        // Regression: pulling the cable used to re-arm on its own, so plugging
+        // straight back in fired a second alert although the battery never
+        // dropped below the threshold. Caught on an emulator, not by a test.
         assertAlerts(reading(80))
         assertSilent(reading(85, plugged = false))   // unplugged, still high
-        assertAlerts(reading(85))                    // plugged back in above threshold
+        assertSilent(reading(85))                    // back in: nothing was crossed
+    }
+
+    @Test
+    fun `unplug, drain below the threshold, then charge past it alerts again`() {
+        assertAlerts(reading(80))
+        assertSilent(reading(85, plugged = false))
+        assertSilent(reading(70, plugged = false))   // genuinely below: re-arms
+        assertSilent(reading(75))                    // charging again, still under
+        assertAlerts(reading(80))                    // a real second crossing
     }
 
     @Test
@@ -104,9 +116,16 @@ class BatteryAlertEngineTest {
     }
 
     @Test
-    fun `baseline while unplugged arms even when above the threshold`() {
-        // Not charging, so the next real crossing is still ahead of us.
+    fun `baseline above the threshold holds even when unplugged`() {
+        // 95% with the cable out is still 95%: charging from here reaches
+        // nothing new, so starting armed would fire on the next plug-in.
         engine.baseline(level = 95, plugged = false, config = enabled)
+        assertFalse(store.batteryAlertArmed)
+    }
+
+    @Test
+    fun `baseline below the threshold arms whether or not it is charging`() {
+        engine.baseline(level = 40, plugged = false, config = enabled)
         assertTrue(store.batteryAlertArmed)
     }
 

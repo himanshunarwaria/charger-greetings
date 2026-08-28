@@ -129,25 +129,84 @@ class PowerWatcherService : Service() {
     }
 
     /**
-     * Calls startForeground with the correct type for the platform.
-     * @return null on success, or a user-presentable failure reason.
+     * Enters the foreground, trying progressively simpler calls.
+     *
+     * ### Why this is layered rather than a single call in a try/catch
+     * startForegroundService() opens a hard five-second contract: this service
+     * MUST successfully call startForeground(), or Android kills the process
+     * with ForegroundServiceDidNotStartInTimeException. Catching a failure and
+     * calling stopSelf() does NOT satisfy that contract -- it converts a
+     * recoverable problem into a guaranteed crash, which is exactly the bug
+     * this method now exists to prevent.
+     *
+     * So every fallback below is an attempt to satisfy the contract by *some*
+     * means rather than to fail gracefully:
+     *   1. Typed call with our own notification   (the normal path)
+     *   2. Untyped call                           (older/odd platform behaviour)
+     *   3. Untyped call with a bare-minimum notification built from a platform
+     *      icon, in case our own notification or channel is what failed
+     *
+     * @return null on success, or a user-presentable reason all attempts failed.
      */
-    private fun enterForeground(): String? = try {
-        val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10+ accepts an explicit type; 14+ requires one.
-            ServiceCompat.startForeground(
-                this,
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+    private fun enterForeground(): String? {
+        var lastFailure: Exception? = null
+
+        // 1. The normal path: explicit type, our notification.
+        try {
+            val notification = buildNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ServiceCompat.startForeground(
+                    this, NOTIFICATION_ID, notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            return null
+        } catch (e: Exception) {
+            lastFailure = e
+            Diagnostics.log(this, "startForeground (typed) failed: " + e.message)
         }
-        null
-    } catch (e: Exception) {
-        describeStartFailure(e)
+
+        // 2. Untyped. Some platform versions and OEM builds reject the typed
+        //    overload while accepting the plain one.
+        try {
+            startForeground(NOTIFICATION_ID, buildNotification())
+            Diagnostics.log(this, "startForeground succeeded without an explicit type")
+            return null
+        } catch (e: Exception) {
+            lastFailure = e
+            Diagnostics.log(this, "startForeground (untyped) failed: " + e.message)
+        }
+
+        // 3. Last resort: a notification that depends on nothing of ours, in
+        //    case our drawable or channel is the problem. Satisfying the
+        //    contract matters more here than how the notification looks.
+        try {
+            startForeground(NOTIFICATION_ID, buildFallbackNotification())
+            Diagnostics.log(this, "startForeground succeeded with the fallback notification")
+            return null
+        } catch (e: Exception) {
+            lastFailure = e
+            Diagnostics.log(this, "startForeground (fallback) failed: " + e.message)
+        }
+
+        return describeStartFailure(lastFailure ?: IllegalStateException("unknown"))
+    }
+
+    /**
+     * The simplest notification that can possibly work: a platform icon and no
+     * dependency on our own resources, PendingIntent or channel settings.
+     */
+    private fun buildFallbackNotification(): Notification {
+        ensureChannel()
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setContentTitle(getString(R.string.watcher_notification_title))
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setOngoing(true)
+            .setSilent(true)
+            .build()
     }
 
     private fun registerDynamicReceiver() {

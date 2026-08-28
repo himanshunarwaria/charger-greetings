@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -348,13 +349,19 @@ private fun SoundSection(
 
             Text("Play for", style = MaterialTheme.typography.bodyMedium)
             Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // FlowRow, not Row: four chips do not fit one line on a phone, and a
+            // Row squeezes the last one until "10 seconds" renders one letter
+            // per line. Wrapping to a second line is the only readable option.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 PlaybackLimit.entries.forEach { limit ->
                     FilterChip(
                         selected = slotState.limit == limit,
                         onClick = { onLimitChange(limit) },
                         enabled = controlsEnabled,
-                        label = { Text(limit.label) }
+                        label = { Text(limit.label, maxLines = 1, softWrap = false) }
                     )
                 }
             }
